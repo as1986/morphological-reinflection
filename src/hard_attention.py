@@ -72,11 +72,13 @@ def load_preprocessed(path):
     from io import open as uopen
     with uopen(path+'.word', encoding='utf-8') as w_fh, \
             uopen(path+'.lemma', encoding='utf-8') as l_fh, \
-            uopen(path+'.align', encoding='utf-8') as a_fh:
+            uopen(path+'.align', encoding='utf-8') as a_fh, \
+            uopen(path+'.goods', encoding='utf-8') as g_fh:
         words = [x.strip() for x in w_fh]
         lemma_lines = [x.strip() for x in l_fh]
         alignment_lines = [x.strip() for x in a_fh]
-        assert(len(words) == len(alignment_lines) and len(words) == len(lemma_lines))
+        goods = [int(x.strip()) for x in g_fh]
+        assert len(words) == len(alignment_lines) and len(words) == len(lemma_lines) and len(words) == len(goods)
         lemmas = []
         alignments = []
         feats = []
@@ -89,7 +91,7 @@ def load_preprocessed(path):
                 alignment.append((in_s, out_s))
             alignments.append(alignment)
             feats.append({'pos': 'V'}) # dummy
-        return words, lemmas, alignments, feats
+        return words, lemmas, alignments, feats, goods
 
 
 def main(train_path, dev_path, test_path, results_file_path, sigmorphon_root_dir, input_dim, hidden_dim, feat_input_dim,
@@ -106,11 +108,11 @@ def main(train_path, dev_path, test_path, results_file_path, sigmorphon_root_dir
         print param + '=' + str(hyper_params[param])
 
     # load train and test data
-    (train_words, train_lemmas, train_aligned_pairs, train_feat_dicts) = \
+    (train_words, train_lemmas, train_aligned_pairs, train_feat_dicts, train_goods) = \
         load_preprocessed(train_path)
-    (dev_words, dev_lemmas, dev_aligned_pairs, dev_feat_dicts) = \
+    (dev_words, dev_lemmas, dev_aligned_pairs, dev_feat_dicts, dev_goods) = \
         load_preprocessed(dev_path)
-    (test_words, test_lemmas, test_aligned_pairs, test_feat_dicts) = \
+    (test_words, test_lemmas, test_aligned_pairs, test_feat_dicts, dev_goods) = \
         load_preprocessed(test_path)
     alphabet, feature_types = prepare_sigmorphon_data.get_alphabet(train_words, train_lemmas, train_feat_dicts)
 
@@ -148,7 +150,7 @@ def main(train_path, dev_path, test_path, results_file_path, sigmorphon_root_dir
                                                         optimization, results_file_path, train_aligned_pairs,
                                                         dev_aligned_pairs,
                                                         feat_index, feature_types, feat_input_dim, feature_alphabet,
-                                                        plot)
+                                                        plot, train_goods, dev_goods)
 
         # print when did each model stop
         print 'stopped on epoch {}'.format(last_epoch)
@@ -181,21 +183,22 @@ def train_model_wrapper(input_dim, hidden_dim, layers, train_lemmas, train_feat_
                         train_words, dev_lemmas, dev_feat_dicts, dev_words,
                         alphabet, alphabet_index, inverse_alphabet_index, epochs,
                         optimization, results_file_path, train_aligned_pairs, dev_aligned_pairs, feat_index,
-                        feature_types, feat_input_dim, feature_alphabet, plot):
+                        feature_types, feat_input_dim, feature_alphabet, plot, train_goods, dev_goods):
     # build model
-    initial_model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn = build_model(alphabet, input_dim, hidden_dim, layers,
-                                                                         feature_types, feat_input_dim,
-                                                                         feature_alphabet)
+    initial_model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn = \
+        build_model(alphabet, input_dim, hidden_dim, layers, feature_types, feat_input_dim,
+                    feature_alphabet)
 
     # train model
-    trained_model, last_epoch = train_model(initial_model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn,
+    trained_model, last_epoch = train_model(initial_model, char_lookup, feat_lookup, R, bias, encoder_frnn,
+                                            encoder_rrnn, decoder_rnn,
                                             train_lemmas,
                                             train_feat_dicts, train_words, dev_lemmas,
                                             dev_feat_dicts, dev_words, alphabet_index,
                                             inverse_alphabet_index,
                                             epochs, optimization, results_file_path,
                                             train_aligned_pairs, dev_aligned_pairs, feat_index, feature_types,
-                                            plot)
+                                            plot, train_goods, dev_goods)
 
     # evaluate last model on dev
     predicted_sequences = rerank_sequences(trained_model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
@@ -264,7 +267,7 @@ def log_to_file(file_name, e, avg_loss, train_accuracy, dev_accuracy):
 def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, train_lemmas,
                 train_feat_dicts, train_words, dev_lemmas, dev_feat_dicts, dev_words, alphabet_index,
                 inverse_alphabet_index, epochs, optimization, results_file_path, train_aligned_pairs, dev_aligned_pairs,
-                feat_index, feature_types, plot):
+                feat_index, feature_types, plot, train_goods, dev_goods):
     print 'training...'
 
     np.random.seed(17)
@@ -307,12 +310,12 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
         # randomize the training set
         indices = range(train_len)
         random.shuffle(indices)
-        train_set = zip(train_lemmas, train_feat_dicts, train_words, train_aligned_pairs)
+        train_set = zip(train_lemmas, train_feat_dicts, train_words, train_aligned_pairs, train_goods)
         train_set = [train_set[i] for i in indices]
 
         # compute loss for each example and update
         for i, example in enumerate(train_set):
-            lemma, feats, words, alignments = example
+            lemma, feats, words, alignments, goods = example
             losses = []
             pc.renew_cg()
             for alignment, word in zip(alignments, words):
@@ -323,8 +326,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             losses = [l-maximum for l in losses]
             z = pc.concatenate(losses)
             z = pc.log(pc.esum(pc.exp(z)))
-            # FIXME only rerank first 1 for now
-            hope = pc.pickrange(z, 0, 1)
+            hope = pc.pickrange(z, 0, goods)
             loss = - (hope - z)
             loss_value = loss.value()
             total_loss += loss_value
