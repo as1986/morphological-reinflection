@@ -68,6 +68,30 @@ STEP = '^'
 ALIGN_SYMBOL = '~'
 
 
+def load_preprocessed(path):
+    from io import open as uopen
+    with uopen(path+'.word', encoding='utf-8') as w_fh, \
+            uopen(path+'.lemma', encoding='utf-8') as l_fh, \
+            uopen(path+'.align', encoding='utf-8') as a_fh:
+        words = [x.strip() for x in w_fh]
+        lemma_lines = [x.strip() for x in l_fh]
+        alignment_lines = [x.strip() for x in a_fh]
+        assert(len(words) == len(alignment_lines) and len(words) == len(lemma_lines))
+        lemmas = []
+        alignments = []
+        feats = []
+        for w, l_line, a_line in zip(words, lemma_lines, alignment_lines):
+            lemmas.append(l_line.split(u' '))
+            from itertools import izip
+            a_iter = iter(a_line.split(u' '))
+            alignment = []
+            for in_s, out_s in izip(a_iter, a_iter):
+                alignment.append((in_s, out_s))
+            alignments.append(alignment)
+            feats.append({'pos': 'V'}) # dummy
+        return words, lemmas, alignments, feats
+
+
 def main(train_path, dev_path, test_path, results_file_path, sigmorphon_root_dir, input_dim, hidden_dim, feat_input_dim,
          epochs, layers, optimization, regularization, learning_rate, plot, eval_only, ensemble):
     hyper_params = {'INPUT_DIM': input_dim, 'HIDDEN_DIM': hidden_dim, 'FEAT_INPUT_DIM': feat_input_dim,
@@ -82,9 +106,12 @@ def main(train_path, dev_path, test_path, results_file_path, sigmorphon_root_dir
         print param + '=' + str(hyper_params[param])
 
     # load train and test data
-    (train_words, train_lemmas, train_feat_dicts) = prepare_sigmorphon_data.load_data(train_path)
-    (dev_words, dev_lemmas, dev_feat_dicts) = prepare_sigmorphon_data.load_data(dev_path)
-    (test_words, test_lemmas, test_feat_dicts) = prepare_sigmorphon_data.load_data(test_path)
+    (train_words, train_lemmas, train_aligned_pairs, train_feat_dicts) = \
+        load_preprocessed(train_path)
+    (dev_words, dev_lemmas, dev_aligned_pairs, dev_feat_dicts) = \
+        load_preprocessed(dev_path)
+    (test_words, test_lemmas, test_aligned_pairs, test_feat_dicts) = \
+        load_preprocessed(test_path)
     alphabet, feature_types = prepare_sigmorphon_data.get_alphabet(train_words, train_lemmas, train_feat_dicts)
 
     # used for character dropout
@@ -113,18 +140,6 @@ def main(train_path, dev_path, test_path, results_file_path, sigmorphon_root_dir
     feat_index = dict(zip(feature_alphabet, range(0, len(feature_alphabet))))
 
     if not eval_only:
-
-        # align the words to the inflections, the alignment will later be used by the model
-        print 'started aligning'
-        train_word_pairs = zip(train_lemmas, train_words)
-        dev_word_pairs = zip(dev_lemmas, dev_words)
-
-        # train_aligned_pairs = dumb_align(train_word_pairs, ALIGN_SYMBOL)
-        train_aligned_pairs = common.mcmc_align(train_word_pairs, ALIGN_SYMBOL)
-
-        # TODO: align together?
-        dev_aligned_pairs = common.mcmc_align(dev_word_pairs, ALIGN_SYMBOL)
-        print 'finished aligning'
 
         last_epochs = []
         trained_model, last_epoch = train_model_wrapper(input_dim, hidden_dim, layers, train_lemmas, train_feat_dicts,
@@ -183,10 +198,12 @@ def train_model_wrapper(input_dim, hidden_dim, layers, train_lemmas, train_feat_
                                             plot)
 
     # evaluate last model on dev
-    predicted_sequences = predict_sequences(trained_model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, alphabet_index,
-                                            inverse_alphabet_index, dev_lemmas, dev_feat_dicts,
-                                            feat_index,
-                                            feature_types)
+    predicted_sequences = rerank_sequences(trained_model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
+                                           decoder_rnn, alphabet_index,
+                                           inverse_alphabet_index, dev_lemmas, dev_words, dev_feat_dicts,
+                                           dev_aligned_pairs,
+                                           feat_index,
+                                           feature_types)
     if len(predicted_sequences) > 0:
         evaluate_model(predicted_sequences, dev_lemmas, dev_feat_dicts, dev_words, feature_types, print_results=False)
     else:
@@ -244,10 +261,10 @@ def log_to_file(file_name, e, avg_loss, train_accuracy, dev_accuracy):
         logfile.write("{}\t{}\t{}\t{}\n".format(e, avg_loss, train_accuracy, dev_accuracy))
 
 
-def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, train_lemmas, train_feat_dicts, train_words, dev_lemmas,
-                dev_feat_dicts, dev_words, alphabet_index, inverse_alphabet_index, epochs, optimization,
-                results_file_path, train_aligned_pairs, dev_aligned_pairs, feat_index, feature_types,
-                plot):
+def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, train_lemmas,
+                train_feat_dicts, train_words, dev_lemmas, dev_feat_dicts, dev_words, alphabet_index,
+                inverse_alphabet_index, epochs, optimization, results_file_path, train_aligned_pairs, dev_aligned_pairs,
+                feat_index, feature_types, plot):
     print 'training...'
 
     np.random.seed(17)
@@ -295,9 +312,20 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
 
         # compute loss for each example and update
         for i, example in enumerate(train_set):
-            lemma, feats, word, alignment = example
-            loss = one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, word,
-                                 alphabet_index, alignment, feat_index, feature_types)
+            lemma, feats, words, alignments = example
+            losses = []
+            pc.renew_cg()
+            for alignment, word in zip(alignments, words):
+                loss = one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, word,
+                                     alphabet_index, alignment, feat_index, feature_types)
+                losses.append(loss)
+            maximum = pc.emax(losses)
+            losses = [l-maximum for l in losses]
+            z = pc.concatenate(losses)
+            z = pc.log(pc.esum(pc.exp(z)))
+            # FIXME only rerank first 1 for now
+            hope = pc.pickrange(z, 0, 1)
+            loss = - (hope - z)
             loss_value = loss.value()
             total_loss += loss_value
             loss.backward()
@@ -311,11 +339,14 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
 
             # get train accuracy
             print 'evaluating on train...'
-            train_predictions = predict_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, alphabet_index,
-                                                  inverse_alphabet_index, train_lemmas[:sanity_set_size],
-                                                  train_feat_dicts[:sanity_set_size],
-                                                  feat_index,
-                                                  feature_types)
+            train_predictions = rerank_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
+                                                 decoder_rnn, alphabet_index,
+                                                 inverse_alphabet_index, train_lemmas[:sanity_set_size],
+                                                 train_words[:sanity_set_size],
+                                                 train_feat_dicts[:sanity_set_size],
+                                                 train_aligned_pairs[:sanity_set_size],
+                                                 feat_index,
+                                                 feature_types)
 
             train_accuracy = evaluate_model(train_predictions, train_lemmas[:sanity_set_size],
                                             train_feat_dicts[:sanity_set_size],
@@ -331,9 +362,14 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             if len(dev_lemmas) > 0:
 
                 # get dev accuracy
-                dev_predictions = predict_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, alphabet_index,
-                                                    inverse_alphabet_index, dev_lemmas, dev_feat_dicts, feat_index,
-                                                    feature_types)
+                dev_predictions = rerank_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
+                                                   decoder_rnn, alphabet_index,
+                                                   inverse_alphabet_index, dev_lemmas,
+                                                   dev_words,
+                                                   dev_feat_dicts,
+                                                   dev_aligned_pairs,
+                                                   feat_index,
+                                                   feature_types)
                 print 'evaluating on dev...'
                 # get dev accuracy
                 dev_accuracy = evaluate_model(dev_predictions, dev_lemmas, dev_feat_dicts, dev_words, feature_types,
@@ -358,15 +394,16 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
 
                 # get dev loss
                 total_dev_loss = 0
+                '''
                 for i in xrange(len(dev_lemmas)):
-                    total_dev_loss += one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, dev_lemmas[i],
+                    total_dev_loss += one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn,
+                                                    encoder_rrnn, decoder_rnn, dev_lemmas[i],
                                                     dev_feat_dicts[i], dev_words[i], alphabet_index,
                                                     dev_aligned_pairs[i], feat_index, feature_types).value()
-
                 avg_dev_loss = total_dev_loss / float(len(dev_lemmas))
                 if avg_dev_loss < best_avg_dev_loss:
                     best_avg_dev_loss = avg_dev_loss
-
+                '''
                 print 'epoch: {0} train loss: {1:.4f} dev loss: {2:.4f} dev accuracy: {3:.4f} train accuracy = {4:.4f} \
  best dev accuracy {5:.4f} best train accuracy: {6:.4f} patience = {7}'.format(e, avg_loss, avg_dev_loss, dev_accuracy,
                                                                                train_accuracy, best_dev_accuracy,
@@ -440,9 +477,10 @@ def save_pycnn_model(model, results_file_path):
 
 
 # noinspection PyPep8Naming,PyUnusedLocal,PyUnusedLocal,PyUnusedLocal,PyUnusedLocal,PyUnusedLocal,PyUnusedLocal
-def one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, word, alphabet_index, aligned_pair,
+def one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, word,
+                  alphabet_index, aligned_pair,
                   feat_index, feature_types):
-    pc.renew_cg()
+    # pc.renew_cg()
 
     # read the parameters
     # char_lookup = model["char_lookup"]
@@ -703,6 +741,33 @@ def predict_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, en
         predicted_sequence = predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma,
                                                      feat_dict, alphabet_index, inverse_alphabet_index, feat_index,
                                                      feature_types)
+
+        # index each output by its matching inputs - lemma + features
+        joint_index = lemma + ':' + common.get_morph_string(feat_dict, feature_types)
+        predictions[joint_index] = predicted_sequence
+
+    return predictions
+
+
+def rerank(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn,
+                  alphabet_index, feat_index, feature_types, lemma, feats, words, alignments):
+    from numpy import argmax
+    losses = []
+    pc.renew_cg()
+    for alignment, word in zip(alignments, words):
+        loss = one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, word,
+                             alphabet_index, alignment, feat_index, feature_types)
+        losses.append(-loss.value())
+    return words[argmax(losses)]
+
+
+def rerank_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, alphabet_index,
+                     inverse_alphabet_index, lemmas, lemma_words, feats, lemma_alignments, feat_index, feature_types):
+    predictions = {}
+    for i, (lemma, words, alignments, feat_dict) in enumerate(zip(lemmas, lemma_words, lemma_alignments, feats)):
+
+        predicted_sequence = rerank(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn,
+                                    alphabet_index, feat_index, feature_types, lemma, feats, words, alignments)
 
         # index each output by its matching inputs - lemma + features
         joint_index = lemma + ':' + common.get_morph_string(feat_dict, feature_types)

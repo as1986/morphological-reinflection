@@ -79,9 +79,12 @@ def dumb_align(wordpairs, align_symbol):
     return alignedpairs
 
 
-def mcmc_align(wordpairs, align_symbol):
-    a = align.Aligner(wordpairs, align_symbol=align_symbol)
-    return a.alignedpairs
+def mcmc_align(wordpairs, align_symbol, k=500):
+    to_return = []
+    to_return.append(align.Aligner(wordpairs, align_symbol=align_symbol).alignedpairs)
+    for _ in xrange(1, k):
+        to_return.append(dumb_align(wordpairs, align_symbol=align_symbol))
+    return to_return
 
 
 def med_align(wordpairs, align_symbol):
