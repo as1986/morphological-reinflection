@@ -326,14 +326,15 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                 loss = one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, word,
                                      alphabet_index, alignment, feat_index, feature_types)
                 losses.append(loss)
-            maximum = pc.emax(losses)
-            losses = [pc.exp(l-maximum) for l in losses]
+            # maximum = pc.emax(losses)
+            # losses = [pc.exp(l-maximum) for l in losses]
             if goods > 0:
                 hope = losses[:goods]
                 loss = - (pc.log(pc.esum(hope)) - pc.log(pc.esum(losses)))
             else:
                 loss = pc.log(pc.esum(losses))
             loss_value = loss.value()
+            print 'loss: {}'.format(loss_value)
             # losses_concat = pc.concatenate(losses)
             # losses_concat = pc.exp(losses_concat - maximum)
             # z = pc.log(pc.sum_cols(losses_concat)) 
@@ -764,14 +765,21 @@ def predict_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, en
 
 def rerank(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn,
                   alphabet_index, feat_index, feature_types, lemma, feats, words, alignments):
-    from numpy import argmax
+    from numpy import argmax, arange, isnan
+    from numpy.random import shuffle
     losses = []
-    for alignment, word in zip(alignments, words):
+    order = arange(len(alignments))
+    shuffle(order)
+    for i in order:
+        alignment = alignments[i]
+        word = words[i]
         pc.renew_cg()
         loss = one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, word,
                              alphabet_index, alignment, feat_index, feature_types)
         losses.append(-loss.value())
-    return words[argmax(losses)]
+    # print 'losses: {}'.format(losses)
+    assert not any(isnan(losses))
+    return words[order[argmax(losses)]]
 
 
 def rerank_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, alphabet_index,
