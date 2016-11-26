@@ -73,17 +73,19 @@ def load_preprocessed(path):
     with uopen(path+'.word', encoding='utf-8') as w_fh, \
             uopen(path+'.lemma', encoding='utf-8') as l_fh, \
             uopen(path+'.align', encoding='utf-8') as a_fh, \
+            uopen(path+'.answer', encoding='utf-8') as ans_fh, \
             uopen(path+'.goods', encoding='utf-8') as g_fh:
-        words = [x.strip() for x in w_fh]
-        lemma_lines = [x.strip() for x in l_fh]
+        lemmas = [x.strip() for x in l_fh]
+        answers = [x.strip() for x in ans_fh]
+        words_lines = [x.strip() for x in w_fh]
         alignment_lines = [x.strip() for x in a_fh]
         goods = [int(x.strip()) for x in g_fh]
-        assert len(words) == len(alignment_lines) and len(words) == len(lemma_lines) and len(words) == len(goods)
-        lemmas = []
+        assert len(lemmas) == len(alignment_lines) and len(lemmas) == len(words_lines) and len(lemmas) == len(goods)
+        words = []
         alignments = []
         feats = []
-        for w, l_line, a_line in zip(words, lemma_lines, alignment_lines):
-            lemmas.append(l_line.split(u' '))
+        for l, w_line, a_line in zip(lemmas, words_lines, alignment_lines):
+            words.append(w_line.split(u' '))
             from itertools import izip
             a_iter = iter(a_line.split(u' '))
             alignment = []
@@ -91,7 +93,7 @@ def load_preprocessed(path):
                 alignment.append((in_s, out_s))
             alignments.append(alignment)
             feats.append({'pos': 'V'}) # dummy
-        return words, lemmas, alignments, feats, goods
+        return words, lemmas, alignments, feats, goods, answers
 
 
 def main(train_path, dev_path, test_path, results_file_path, sigmorphon_root_dir, input_dim, hidden_dim, feat_input_dim,
@@ -108,11 +110,11 @@ def main(train_path, dev_path, test_path, results_file_path, sigmorphon_root_dir
         print param + '=' + str(hyper_params[param])
 
     # load train and test data
-    (train_words, train_lemmas, train_aligned_pairs, train_feat_dicts, train_goods) = \
+    (train_words, train_lemmas, train_aligned_pairs, train_feat_dicts, train_goods, train_answers) = \
         load_preprocessed(train_path)
-    (dev_words, dev_lemmas, dev_aligned_pairs, dev_feat_dicts, dev_goods) = \
+    (dev_words, dev_lemmas, dev_aligned_pairs, dev_feat_dicts, dev_goods, dev_answers) = \
         load_preprocessed(dev_path)
-    (test_words, test_lemmas, test_aligned_pairs, test_feat_dicts, dev_goods) = \
+    (test_words, test_lemmas, test_aligned_pairs, test_feat_dicts, test_goods, test_answers) = \
         load_preprocessed(test_path)
     alphabet, feature_types = prepare_sigmorphon_data.get_alphabet(train_words, train_lemmas, train_feat_dicts)
 
@@ -150,7 +152,8 @@ def main(train_path, dev_path, test_path, results_file_path, sigmorphon_root_dir
                                                         optimization, results_file_path, train_aligned_pairs,
                                                         dev_aligned_pairs,
                                                         feat_index, feature_types, feat_input_dim, feature_alphabet,
-                                                        plot, train_goods, dev_goods)
+                                                        plot, train_goods, dev_goods, train_answers, dev_answers
+                                                        )
 
         # print when did each model stop
         print 'stopped on epoch {}'.format(last_epoch)
@@ -183,7 +186,8 @@ def train_model_wrapper(input_dim, hidden_dim, layers, train_lemmas, train_feat_
                         train_words, dev_lemmas, dev_feat_dicts, dev_words,
                         alphabet, alphabet_index, inverse_alphabet_index, epochs,
                         optimization, results_file_path, train_aligned_pairs, dev_aligned_pairs, feat_index,
-                        feature_types, feat_input_dim, feature_alphabet, plot, train_goods, dev_goods):
+                        feature_types, feat_input_dim, feature_alphabet, plot, train_goods, dev_goods, train_answers,
+                        dev_answers):
     # build model
     initial_model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn = \
         build_model(alphabet, input_dim, hidden_dim, layers, feature_types, feat_input_dim,
@@ -198,7 +202,7 @@ def train_model_wrapper(input_dim, hidden_dim, layers, train_lemmas, train_feat_
                                             inverse_alphabet_index,
                                             epochs, optimization, results_file_path,
                                             train_aligned_pairs, dev_aligned_pairs, feat_index, feature_types,
-                                            plot, train_goods, dev_goods)
+                                            plot, train_goods, dev_goods, train_answers, dev_answers)
 
     # evaluate last model on dev
     predicted_sequences = rerank_sequences(trained_model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
@@ -267,7 +271,7 @@ def log_to_file(file_name, e, avg_loss, train_accuracy, dev_accuracy):
 def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, train_lemmas,
                 train_feat_dicts, train_words, dev_lemmas, dev_feat_dicts, dev_words, alphabet_index,
                 inverse_alphabet_index, epochs, optimization, results_file_path, train_aligned_pairs, dev_aligned_pairs,
-                feat_index, feature_types, plot, train_goods, dev_goods):
+                feat_index, feature_types, plot, train_goods, dev_goods, train_answers, dev_answers):
     print 'training...'
 
     np.random.seed(17)
@@ -323,12 +327,18 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                                      alphabet_index, alignment, feat_index, feature_types)
                 losses.append(loss)
             maximum = pc.emax(losses)
-            losses = [l-maximum for l in losses]
-            z = pc.concatenate(losses)
-            z = pc.log(pc.esum(pc.exp(z)))
-            hope = pc.pickrange(z, 0, goods)
-            loss = - (hope - z)
+            losses = [pc.exp(l-maximum) for l in losses]
+            if goods > 0:
+                hope = losses[:goods]
+                loss = - (pc.log(pc.esum(hope)) - pc.log(pc.esum(losses)))
+            else:
+                loss = pc.log(pc.esum(losses))
             loss_value = loss.value()
+            # losses_concat = pc.concatenate(losses)
+            # losses_concat = pc.exp(losses_concat - maximum)
+            # z = pc.log(pc.sum_cols(losses_concat)) 
+            # hope = losses_concat[0:goods]
+            # loss = - (pc.log(pc.sum_cols(hope)) - z)
             total_loss += loss_value
             loss.backward()
             trainer.update()
@@ -352,7 +362,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
 
             train_accuracy = evaluate_model(train_predictions, train_lemmas[:sanity_set_size],
                                             train_feat_dicts[:sanity_set_size],
-                                            train_words[:sanity_set_size],
+                                            train_answers[:sanity_set_size],
                                             feature_types, print_results=False)[1]
 
             if train_accuracy > best_train_accuracy:
@@ -374,7 +384,8 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                                                    feature_types)
                 print 'evaluating on dev...'
                 # get dev accuracy
-                dev_accuracy = evaluate_model(dev_predictions, dev_lemmas, dev_feat_dicts, dev_words, feature_types,
+                dev_accuracy = evaluate_model(dev_predictions, dev_lemmas, dev_feat_dicts, dev_answers, 
+                                              feature_types,
                                               print_results=True)[1]
 
                 if dev_accuracy > best_dev_accuracy:
