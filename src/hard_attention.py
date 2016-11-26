@@ -326,8 +326,9 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                 loss = one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, word,
                                      alphabet_index, alignment, feat_index, feature_types)
                 losses.append(loss)
-            maximum = pc.emax(losses)
-            losses = [pc.exp(l-maximum) for l in losses]
+            # maximum = pc.emax(losses)
+            # losses = [pc.exp(l-maximum) for l in losses]
+            losses = [pc.exp(x) for x in losses]
             if goods > 0:
                 hope = losses[:goods]
                 loss = - (pc.log(pc.esum(hope)) - pc.log(pc.esum(losses)))
