@@ -766,8 +766,8 @@ def rerank(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
                   alphabet_index, feat_index, feature_types, lemma, feats, words, alignments):
     from numpy import argmax
     losses = []
-    pc.renew_cg()
     for alignment, word in zip(alignments, words):
+        pc.renew_cg()
         loss = one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, word,
                              alphabet_index, alignment, feat_index, feature_types)
         losses.append(-loss.value())
