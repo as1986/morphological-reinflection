@@ -323,12 +323,13 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             losses = []
             pc.renew_cg()
             for alignment, word in zip(alignments, words):
-                loss = one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, word,
+                loss = - one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, word,
                                      alphabet_index, alignment, feat_index, feature_types)
                 losses.append(loss)
-            # maximum = pc.emax(losses)
-            # losses = [pc.exp(l-maximum) for l in losses]
-            losses = [pc.exp(x) for x in losses]
+            maximum = pc.emax(losses)
+            original_losses = losses
+            losses = [pc.exp(l-maximum) for l in original_losses]
+            # losses = [pc.exp(x) for x in losses]
             if goods > 0:
                 hope = losses[:goods]
                 loss = - (pc.log(pc.esum(hope)) - pc.log(pc.esum(losses)))
@@ -336,6 +337,11 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                 loss = pc.log(pc.esum(losses))
             loss_value = loss.value()
             print 'loss: {}'.format(loss_value)
+            from numpy import isnan, isinf
+            if isnan(loss_value) or isinf(loss_value):
+                print 'losses: {}'.format([x.value() for x in original_losses])
+                print 'maximum: {}'.format(maximum.value())
+                assert False
             # losses_concat = pc.concatenate(losses)
             # losses_concat = pc.exp(losses_concat - maximum)
             # z = pc.log(pc.sum_cols(losses_concat)) 
@@ -495,6 +501,7 @@ def save_pycnn_model(model, results_file_path):
 def one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, word,
                   alphabet_index, aligned_pair,
                   feat_index, feature_types):
+    from numpy import isnan, isinf
     # pc.renew_cg()
 
     # read the parameters
@@ -535,6 +542,8 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
     aligned_lemma, aligned_word = aligned_pair
     aligned_lemma += END_WORD
     aligned_word += END_WORD
+    eps = 1e-10
+    bias = bias
 
     # run through the alignments
     for index, (input_char, output_char) in enumerate(zip(aligned_lemma, aligned_word)):
@@ -545,14 +554,21 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
                                         blstm_outputs[i],
                                         feats_input])
 
+        d_check = decoder_input.npvalue()
+        assert not any(isnan(d_check)), (d_check, feats_input.npvalue(), prev_output_vec.npvalue())
+        assert not any(isinf(d_check)), (d_check, feats_input.npvalue(), prev_output_vec.npvalue())
         # if reached the end word symbol
         if output_char == END_WORD:
             s = s.add_input(decoder_input)
             decoder_rnn_output = s.output()
-            probs = pc.softmax(R * decoder_rnn_output + bias)
+            probs = pc.log_softmax(R * decoder_rnn_output + bias)
+
+            p_check = probs.npvalue()
+            assert not any(isnan(p_check)), (p_check, decoder_rnn_output.npvalue())
+            assert not any(isinf(p_check)), (p_check, decoder_rnn_output.npvalue())
 
             # compute local loss
-            loss.append(-pc.log(pc.pick(probs, alphabet_index[END_WORD])))
+            loss.append(-pc.pick(probs, alphabet_index[END_WORD]))
             continue
 
         # first step: if there is no prefix in the output (shouldn't delay on current input), step forward
@@ -561,10 +577,14 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
             # feedback, i, j, blstm[i], feats
             s = s.add_input(decoder_input)
             decoder_rnn_output = s.output()
-            probs = pc.softmax(R * decoder_rnn_output + bias)
+            probs = pc.log_softmax(R * decoder_rnn_output + bias)
+
+            p_check = probs.npvalue()
+            assert not any(isnan(p_check)), (p_check, decoder_rnn_output.npvalue())
+            assert not any(isinf(p_check)), (p_check, decoder_rnn_output.npvalue())
 
             # compute local loss
-            loss.append(-pc.log(pc.pick(probs, alphabet_index[STEP])))
+            loss.append(-pc.pick(probs, alphabet_index[STEP]))
 
             # prepare for the next iteration - "feedback"
             prev_output_vec = char_lookup[alphabet_index[STEP]]
@@ -580,15 +600,19 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
             # perform rnn step
             s = s.add_input(decoder_input)
             decoder_rnn_output = s.output()
-            probs = pc.softmax(R * decoder_rnn_output + bias)
+            probs = pc.log_softmax(R * decoder_rnn_output + bias)
+
+            p_check = probs.npvalue()
+            assert not any(isnan(p_check)), (p_check, decoder_rnn_output.npvalue())
+            assert not any(isinf(p_check)), (p_check, decoder_rnn_output.npvalue())
 
             if aligned_word[index] in alphabet_index:
-                current_loss = -pc.log(pc.pick(probs, alphabet_index[aligned_word[index]]))
+                current_loss = -pc.pick(probs, alphabet_index[aligned_word[index]])
 
                 # prepare for the next iteration - "feedback"
                 prev_output_vec = char_lookup[alphabet_index[aligned_word[index]]]
             else:
-                current_loss = -pc.log(pc.pick(probs, alphabet_index[UNK]))
+                current_loss = -pc.pick(probs, alphabet_index[UNK])
 
                 # prepare for the next iteration - "feedback"
                 prev_output_vec = char_lookup[alphabet_index[UNK]]
@@ -606,16 +630,28 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
 
             s = s.add_input(decoder_input)
             decoder_rnn_output = s.output()
-            probs = pc.softmax(R * decoder_rnn_output + bias)
+            probs = pc.log_softmax(R * decoder_rnn_output + bias)
+
+            p_check = probs.npvalue()
+            assert not any(isnan(p_check)), (p_check, decoder_rnn_output.npvalue())
+            assert not any(isinf(p_check)), (p_check, decoder_rnn_output.npvalue())
 
             # compute local loss
-            loss.append(-pc.log(pc.pick(probs, alphabet_index[STEP])))
+            loss.append(-pc.pick(probs, alphabet_index[STEP]))
 
             # prepare for the next iteration - "feedback"
             prev_output_vec = char_lookup[alphabet_index[STEP]]
             i += 1
 
     # loss = esum(loss)
+    check_l = [l.value() for l in loss]
+    if any(isnan(check_l)) or any(isinf(check_l)):
+        print 'one_word_loss assertion failed!'
+        print check_l
+        print lemma
+        print word
+        print aligned_pair
+        assert False
     loss = pc.average(loss)
 
     return loss
@@ -766,7 +802,7 @@ def predict_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, en
 
 def rerank(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn,
                   alphabet_index, feat_index, feature_types, lemma, feats, words, alignments):
-    from numpy import argmax, arange, isnan
+    from numpy import argmax, arange, isnan, isinf
     from numpy.random import shuffle
     losses = []
     order = arange(len(alignments))
@@ -777,9 +813,10 @@ def rerank(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
         pc.renew_cg()
         loss = one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, word,
                              alphabet_index, alignment, feat_index, feature_types)
-        losses.append(-loss.value())
+        losses.append(loss.value())
     # print 'losses: {}'.format(losses)
     assert not any(isnan(losses))
+    assert not any(isinf(losses))
     return words[order[argmax(losses)]]
 
 
