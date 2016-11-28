@@ -530,7 +530,7 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
 
     feats_input = pc.concatenate(feat_vecs)
     
-    if previous_blstm is None:
+    if previous_blstm is None or True:
         # convert characters to matching embeddings
         lemma_char_vecs = encode_lemma(alphabet_index, char_lookup, padded_lemma)
         blstm_outputs = bilstm_transduce(encoder_frnn, encoder_rrnn, lemma_char_vecs)
@@ -667,7 +667,9 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
         print word
         print aligned_pair
         assert False
-    loss = pc.average(loss)
+    loss = pc.esum(loss)
+    # loss = pc.esum(loss) / len(loss)
+    # loss = pc.average(loss)
 
     return loss, blstm_outputs, lemma_char_vecs
 
