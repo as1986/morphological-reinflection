@@ -296,7 +296,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
     best_train_accuracy = -1
     patience = 0
     train_len = len(train_words)
-    sanity_set_size = 100
+    sanity_set_size = 10
     epochs_x = []
     train_loss_y = []
     dev_loss_y = []
@@ -337,21 +337,17 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                                                               previous_lemma_vecs=prev_lemma)
                 loss = - loss
                 losses.append(loss)
-            maximum = pc.emax(losses)
-            original_losses = losses
-            losses = [pc.exp(l-maximum) for l in original_losses]
             # losses = [pc.exp(x) for x in losses]
             if goods > 0:
                 hope = losses[:goods]
-                loss = - (pc.log(pc.esum(hope)) - pc.log(pc.esum(losses)))
+                loss = (pc.logsumexp(hope) - pc.logsumexp(losses))
             else:
-                loss = pc.log(pc.esum(losses))
+                loss = - pc.logsumexp(losses)
             loss_value = loss.value()
             print 'loss: {}'.format(loss_value)
             from numpy import isnan, isinf
             if isnan(loss_value) or isinf(loss_value):
                 print 'losses: {}'.format([x.value() for x in original_losses])
-                print 'maximum: {}'.format(maximum.value())
                 assert False
             # losses_concat = pc.concatenate(losses)
             # losses_concat = pc.exp(losses_concat - maximum)
@@ -836,7 +832,7 @@ def rerank(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
                                                      encoder_rrnn, decoder_rnn, lemma, feats, word,
                                                      alphabet_index, alignment, feat_index, feature_types,
                                                      previous_blstm=prev_blstm, previous_lemma_vecs=prev_lemma)
-        losses.append(loss.value())
+        losses.append(-loss.value())
     # print 'losses: {}'.format(losses)
     assert not any(isnan(losses))
     assert not any(isinf(losses))
