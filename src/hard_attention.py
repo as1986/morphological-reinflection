@@ -324,9 +324,18 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             pc.renew_cg()
             expr_R = pc.parameter(R)
             expr_bias = pc.parameter(bias)
+            prev_bilstm = None
+            prev_lemma = None
             for alignment, word in zip(alignments, words):
-                loss = - one_word_loss(model, char_lookup, feat_lookup, expr_R, expr_bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, word,
-                                     alphabet_index, alignment, feat_index, feature_types)
+                loss, prev_bilstm, prev_lemma = one_word_loss(model, char_lookup, feat_lookup, 
+                                                              expr_R, expr_bias, encoder_frnn, 
+                                                              encoder_rrnn, decoder_rnn, lemma, 
+                                                              feats, word, alphabet_index, 
+                                                              alignment, feat_index, 
+                                                              feature_types, 
+                                                              previous_blstm=prev_bilstm, 
+                                                              previous_lemma_vecs=prev_lemma)
+                loss = - loss
                 losses.append(loss)
             maximum = pc.emax(losses)
             original_losses = losses
@@ -502,7 +511,7 @@ def save_pycnn_model(model, results_file_path):
 # noinspection PyPep8Naming,PyUnusedLocal,PyUnusedLocal,PyUnusedLocal,PyUnusedLocal,PyUnusedLocal,PyUnusedLocal
 def one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, word,
                   alphabet_index, aligned_pair,
-                  feat_index, feature_types):
+                  feat_index, feature_types, previous_blstm=None, previous_lemma_vecs=None):
     from numpy import isnan, isinf
     # pc.renew_cg()
 
@@ -516,15 +525,19 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
 
     padded_lemma = BEGIN_WORD + lemma + END_WORD
 
-    # convert characters to matching embeddings
-    lemma_char_vecs = encode_lemma(alphabet_index, char_lookup, padded_lemma)
-
     # convert features to matching embeddings, if UNK handle properly
     feat_vecs = encode_feats(feat_index, feat_lookup, feats, feature_types)
 
     feats_input = pc.concatenate(feat_vecs)
-
-    blstm_outputs = bilstm_transduce(encoder_frnn, encoder_rrnn, lemma_char_vecs)
+    
+    if previous_blstm is None:
+        # convert characters to matching embeddings
+        lemma_char_vecs = encode_lemma(alphabet_index, char_lookup, padded_lemma)
+        blstm_outputs = bilstm_transduce(encoder_frnn, encoder_rrnn, lemma_char_vecs)
+    else:
+        assert previous_lemma_vecs is not None
+        lemma_char_vecs = previous_lemma_vecs
+        blstm_outputs = previous_blstm
 
     # initialize the decoder rnn
     s_0 = decoder_rnn.initial_state()
@@ -656,7 +669,7 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
         assert False
     loss = pc.average(loss)
 
-    return loss
+    return loss, blstm_outputs, lemma_char_vecs
 
 
 def encode_feats(feat_index, feat_lookup, feats, feature_types):
@@ -809,14 +822,16 @@ def rerank(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
     losses = []
     order = arange(len(alignments))
     shuffle(order)
+    prev_blstm = None
+    prev_lemma = None
     for i in order:
         alignment = alignments[i]
         word = words[i]
         pc.renew_cg()
         expr_R = pc.parameter(R)
         expr_bias = pc.parameter(bias)
-        loss = one_word_loss(model, char_lookup, feat_lookup, expr_R, expr_bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, word,
-                             alphabet_index, alignment, feat_index, feature_types)
+        loss, prev_blstm, prev_lemma = one_word_loss(model, char_lookup, feat_lookup, expr_R, expr_bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, word,
+                             alphabet_index, alignment, feat_index, feature_types, previous_blstm=prev_blstm, previous_lemma_vecs=prev_lemma)
         losses.append(loss.value())
     # print 'losses: {}'.format(losses)
     assert not any(isnan(losses))
