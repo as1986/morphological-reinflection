@@ -27,6 +27,7 @@ Options:
   --learning=LEARNING           learning rate parameter for optimization
   --plot                        draw a learning curve plot while training each model
   --eval                        run evaluation without training
+  --init-epochs                 number of initialization epochs (i.e. epochs in which the original objective is being minimized)
   --ensemble=ENSEMBLE           ensemble model paths, separated by comma
 """
 
@@ -97,11 +98,11 @@ def load_preprocessed(path):
 
 
 def main(train_path, dev_path, test_path, results_file_path, sigmorphon_root_dir, input_dim, hidden_dim, feat_input_dim,
-         epochs, layers, optimization, regularization, learning_rate, plot, eval_only, ensemble):
+         epochs, layers, optimization, regularization, learning_rate, plot, eval_only, ensemble, init_epochs):
     hyper_params = {'INPUT_DIM': input_dim, 'HIDDEN_DIM': hidden_dim, 'FEAT_INPUT_DIM': feat_input_dim,
                     'EPOCHS': epochs, 'LAYERS': layers, 'MAX_PREDICTION_LEN': MAX_PREDICTION_LEN,
                     'OPTIMIZATION': optimization, 'PATIENCE': MAX_PATIENCE, 'REGULARIZATION': regularization,
-                    'LEARNING_RATE': learning_rate}
+                    'LEARNING_RATE': learning_rate, 'INIT_EPOCHS': init_epochs}
 
     print 'train path = ' + str(train_path)
     print 'dev path =' + str(dev_path)
@@ -152,7 +153,8 @@ def main(train_path, dev_path, test_path, results_file_path, sigmorphon_root_dir
                                                         optimization, results_file_path, train_aligned_pairs,
                                                         dev_aligned_pairs,
                                                         feat_index, feature_types, feat_input_dim, feature_alphabet,
-                                                        plot, train_goods, dev_goods, train_answers, dev_answers
+                                                        plot, train_goods, dev_goods, train_answers, dev_answers,
+                                                        init_epochs
                                                         )
 
         # print when did each model stop
@@ -187,7 +189,7 @@ def train_model_wrapper(input_dim, hidden_dim, layers, train_lemmas, train_feat_
                         alphabet, alphabet_index, inverse_alphabet_index, epochs,
                         optimization, results_file_path, train_aligned_pairs, dev_aligned_pairs, feat_index,
                         feature_types, feat_input_dim, feature_alphabet, plot, train_goods, dev_goods, train_answers,
-                        dev_answers):
+                        dev_answers, init_epochs):
     # build model
     initial_model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn = \
         build_model(alphabet, input_dim, hidden_dim, layers, feature_types, feat_input_dim,
@@ -202,7 +204,7 @@ def train_model_wrapper(input_dim, hidden_dim, layers, train_lemmas, train_feat_
                                             inverse_alphabet_index,
                                             epochs, optimization, results_file_path,
                                             train_aligned_pairs, dev_aligned_pairs, feat_index, feature_types,
-                                            plot, train_goods, dev_goods, train_answers, dev_answers)
+                                            plot, train_goods, dev_goods, train_answers, dev_answers, init_epochs)
 
     # evaluate last model on dev
     predicted_sequences = rerank_sequences(trained_model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
@@ -271,7 +273,7 @@ def log_to_file(file_name, e, avg_loss, train_accuracy, dev_accuracy):
 def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, train_lemmas,
                 train_feat_dicts, train_words, dev_lemmas, dev_feat_dicts, dev_words, alphabet_index,
                 inverse_alphabet_index, epochs, optimization, results_file_path, train_aligned_pairs, dev_aligned_pairs,
-                feat_index, feature_types, plot, train_goods, dev_goods, train_answers, dev_answers):
+                feat_index, feature_types, plot, train_goods, dev_goods, train_answers, dev_answers, init_epochs):
     print 'training...'
 
     np.random.seed(17)
@@ -320,6 +322,11 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
         # compute loss for each example and update
         for i, example in enumerate(train_set):
             lemma, feats, words, alignments, goods = example
+            if e < init_epochs:
+                if goods <= 0:
+                    continue
+                alignments = alignments[:goods]
+                words = words[:goods]
             losses = []
             pc.renew_cg()
             expr_R = pc.parameter(R)
@@ -327,31 +334,34 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             prev_bilstm = None
             prev_lemma = None
             for alignment, word in zip(alignments, words):
-                loss, prev_bilstm, prev_lemma = one_word_loss(model, char_lookup, feat_lookup, 
-                                                              expr_R, expr_bias, encoder_frnn, 
-                                                              encoder_rrnn, decoder_rnn, lemma, 
-                                                              feats, word, alphabet_index, 
-                                                              alignment, feat_index, 
-                                                              feature_types, 
-                                                              previous_blstm=prev_bilstm, 
+                loss, prev_bilstm, prev_lemma = one_word_loss(model, char_lookup, feat_lookup,
+                                                              expr_R, expr_bias, encoder_frnn,
+                                                              encoder_rrnn, decoder_rnn, lemma,
+                                                              feats, word, alphabet_index,
+                                                              alignment, feat_index,
+                                                              feature_types,
+                                                              previous_blstm=prev_bilstm,
                                                               previous_lemma_vecs=prev_lemma)
                 loss = - loss
                 losses.append(loss)
             # losses = [pc.exp(x) for x in losses]
-            if goods > 0:
-                hope = losses[:goods]
-                loss = (pc.logsumexp(hope) - pc.logsumexp(losses))
-            else:
+            if e < init_epochs:
                 loss = - pc.logsumexp(losses)
+            else:
+                if goods > 0:
+                    hope = losses[:goods]
+                    loss = - (pc.logsumexp(hope) - pc.logsumexp(losses))
+                else:
+                    loss = pc.logsumexp(losses)
             loss_value = loss.value()
             print 'loss: {}'.format(loss_value)
             from numpy import isnan, isinf
             if isnan(loss_value) or isinf(loss_value):
-                print 'losses: {}'.format([x.value() for x in original_losses])
+                print 'losses: {}'.format([x.value() for x in losses])
                 assert False
             # losses_concat = pc.concatenate(losses)
             # losses_concat = pc.exp(losses_concat - maximum)
-            # z = pc.log(pc.sum_cols(losses_concat)) 
+            # z = pc.log(pc.sum_cols(losses_concat))
             # hope = losses_concat[0:goods]
             # loss = - (pc.log(pc.sum_cols(hope)) - z)
             total_loss += loss_value
@@ -399,7 +409,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                                                    feature_types)
                 print 'evaluating on dev...'
                 # get dev accuracy
-                dev_accuracy = evaluate_model(dev_predictions, dev_lemmas, dev_feat_dicts, dev_answers, 
+                dev_accuracy = evaluate_model(dev_predictions, dev_lemmas, dev_feat_dicts, dev_answers,
                                               feature_types,
                                               print_results=True)[1]
 
@@ -525,7 +535,7 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
     feat_vecs = encode_feats(feat_index, feat_lookup, feats, feature_types)
 
     feats_input = pc.concatenate(feat_vecs)
-    
+
     if previous_blstm is None or True:
         # convert characters to matching embeddings
         lemma_char_vecs = encode_lemma(alphabet_index, char_lookup, padded_lemma)
@@ -832,7 +842,7 @@ def rerank(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
                                                      encoder_rrnn, decoder_rnn, lemma, feats, word,
                                                      alphabet_index, alignment, feat_index, feature_types,
                                                      previous_blstm=prev_blstm, previous_lemma_vecs=prev_lemma)
-        losses.append(-loss.value())
+        losses.append(loss.value())
     # print 'losses: {}'.format(losses)
     assert not any(isnan(losses))
     assert not any(isinf(losses))
@@ -1104,12 +1114,17 @@ if __name__ == '__main__':
     else:
         ensemble_param = False
 
+    if arguments['--init-epochs']:
+        init_epochs_param = int(arguments['--init-epochs'])
+    else:
+        init_epochs_param = -1
+
     print arguments
 
     main(train_path_param, dev_path_param, test_path_param, results_file_path_param, sigmorphon_root_dir_param,
          input_dim_param,
          hidden_dim_param, feat_input_dim_param, epochs_param, layers_param, optimization_param, regularization_param,
-         learning_rate_param, plot_param, eval_param, ensemble_param)
+         learning_rate_param, plot_param, eval_param, ensemble_param, init_epochs_param)
 
 
 def encode_feats_and_chars(alphabet_index, char_lookup, encoder_frnn, encoder_rrnn, feat_index, feat_lookup, feats,

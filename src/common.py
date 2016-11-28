@@ -91,6 +91,7 @@ def med_align(wordpairs, align_symbol):
     a = align.Aligner(wordpairs, align_symbol=align_symbol, mode='med')
     return a.alignedpairs
 
+
 def write_results_file_and_evaluate_externally(hyper_params, accuracy, train_path, test_path, output_file_path,
                                                sigmorphon_root_dir,
                                                final_results, nbest=False):
