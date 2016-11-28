@@ -396,7 +396,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             dev_accuracy = 0
             avg_dev_loss = 0
 
-            if len(dev_lemmas) > 0:
+            if len(dev_lemmas) > 0 and False:
 
                 # get dev accuracy
                 dev_predictions = rerank_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
