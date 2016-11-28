@@ -832,8 +832,10 @@ def rerank(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
         pc.renew_cg()
         expr_R = pc.parameter(R)
         expr_bias = pc.parameter(bias)
-        loss, prev_blstm, prev_lemma = one_word_loss(model, char_lookup, feat_lookup, expr_R, expr_bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, word,
-                             alphabet_index, alignment, feat_index, feature_types, previous_blstm=prev_blstm, previous_lemma_vecs=prev_lemma)
+        loss, prev_blstm, prev_lemma = one_word_loss(model, char_lookup, feat_lookup, expr_R, expr_bias, encoder_frnn,
+                                                     encoder_rrnn, decoder_rnn, lemma, feats, word,
+                                                     alphabet_index, alignment, feat_index, feature_types,
+                                                     previous_blstm=prev_blstm, previous_lemma_vecs=prev_lemma)
         losses.append(loss.value())
     # print 'losses: {}'.format(losses)
     assert not any(isnan(losses))
