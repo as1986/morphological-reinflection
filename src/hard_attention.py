@@ -340,9 +340,9 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             # losses = [pc.exp(x) for x in losses]
             if goods > 0:
                 hope = losses[:goods]
-                loss = (pc.logsumexp(hope) - pc.logsumexp(losses))
+                loss = -(pc.logsumexp(hope) - pc.logsumexp(losses))
             else:
-                loss = - pc.logsumexp(losses)
+                loss = pc.logsumexp(losses)
             loss_value = loss.value()
             print 'loss: {}'.format(loss_value)
             from numpy import isnan, isinf
@@ -386,7 +386,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             dev_accuracy = 0
             avg_dev_loss = 0
 
-            if len(dev_lemmas) > 0:
+            if len(dev_lemmas) > 0 and False:
 
                 # get dev accuracy
                 dev_predictions = rerank_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
