@@ -322,8 +322,10 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             lemma, feats, words, alignments, goods = example
             losses = []
             pc.renew_cg()
+            expr_R = pc.parameter(R)
+            expr_bias = pc.parameter(bias)
             for alignment, word in zip(alignments, words):
-                loss = - one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, word,
+                loss = - one_word_loss(model, char_lookup, feat_lookup, expr_R, expr_bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, word,
                                      alphabet_index, alignment, feat_index, feature_types)
                 losses.append(loss)
             maximum = pc.emax(losses)
@@ -509,8 +511,8 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
     # feat_lookup = model["feat_lookup"]
     # R = pc.parameter(model["R"])
     # bias = pc.parameter(model["bias"])
-    R = pc.parameter(R)
-    bias = pc.parameter(bias)
+    # R = pc.parameter(R)
+    # bias = pc.parameter(bias)
 
     padded_lemma = BEGIN_WORD + lemma + END_WORD
 
@@ -811,7 +813,9 @@ def rerank(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
         alignment = alignments[i]
         word = words[i]
         pc.renew_cg()
-        loss = one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, word,
+        expr_R = pc.parameter(R)
+        expr_bias = pc.parameter(bias)
+        loss = one_word_loss(model, char_lookup, feat_lookup, expr_R, expr_bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, word,
                              alphabet_index, alignment, feat_index, feature_types)
         losses.append(loss.value())
     # print 'losses: {}'.format(losses)
