@@ -343,7 +343,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                                                               previous_blstm=prev_bilstm,
                                                               previous_lemma_vecs=prev_lemma)
                 log_likelihood = - loss
-                log_likelihoods.append(loglikelihood)
+                log_likelihoods.append(log_likelihood)
             # losses = [pc.exp(x) for x in losses]
             if e < init_epochs:
                 nll = - pc.logsumexp(log_likelihoods)
