@@ -177,3 +177,47 @@ def mirror_data(train_target_words, train_source_words, train_target_feat_dicts,
            mirrored_train_source_words, \
            mirrored_train_target_feat_dicts, \
            mirrored_train_source_feat_dicts
+
+
+def load_preprocessed(path, filter_infeasible=False):
+    from io import open as uopen
+    with uopen(path+'.word', encoding='utf-8') as w_fh, \
+            uopen(path+'.lemma', encoding='utf-8') as l_fh, \
+            uopen(path+'.align', encoding='utf-8') as a_fh, \
+            uopen(path+'.answer', encoding='utf-8') as ans_fh, \
+            uopen(path+'.goods', encoding='utf-8') as g_fh:
+        lemmas = [x.strip() for x in l_fh]
+        answers = [x.strip() for x in ans_fh]
+        words_lines = [x.strip() for x in w_fh]
+        alignment_lines = [x.strip() for x in a_fh]
+        goods = [int(x.strip()) for x in g_fh]
+        assert len(lemmas) == len(alignment_lines) and len(lemmas) == len(words_lines) and len(lemmas) == len(goods)
+        words = []
+        alignments = []
+        feats = []
+
+        if filter_infeasible:
+            new_lemmas, new_answers, new_words_lines, new_alignment_lines, new_goods = [], [], [], [], []
+            for l, a, w_l, a_l, g in zip(lemmas, answers, words_lines, alignment_lines, goods):
+                if g > 0:
+                    new_lemmas.append(l)
+                    new_answers.append(a)
+                    new_words_lines.append(w_l)
+                    new_alignment_lines.append(a_l)
+                    new_goods.append(g)
+            lemmas = new_lemmas
+            answers = new_answers
+            words_lines = new_words_lines
+            alignment_lines = new_alignment_lines
+            goods = new_goods
+
+        for l, w_line, a_line in zip(lemmas, words_lines, alignment_lines):
+            words.append(w_line.split(u' '))
+            from itertools import izip
+            a_iter = iter(a_line.split(u' '))
+            alignment = []
+            for in_s, out_s in izip(a_iter, a_iter):
+                alignment.append((in_s, out_s))
+            alignments.append(alignment)
+            feats.append({'pos': 'V'}) # dummy
+        return words, lemmas, alignments, feats, goods, answers

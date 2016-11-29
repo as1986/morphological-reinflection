@@ -4,8 +4,8 @@ files and evaluation script.
 Usage:
   hard_attention.py [--dynet-mem MEM][--input=INPUT] [--hidden=HIDDEN]
   [--feat-input=FEAT] [--epochs=EPOCHS] [--layers=LAYERS] [--optimization=OPTIMIZATION] [--reg=REGULARIZATION]
-  [--learning=LEARNING] [--plot] [--eval] [--ensemble=ENSEMBLE] TRAIN_PATH DEV_PATH TEST_PATH RESULTS_PATH
-  SIGMORPHON_PATH...
+  [--learning=LEARNING] [--plot] [--eval] [--own-alignments] [--ensemble=ENSEMBLE] TRAIN_PATH DEV_PATH TEST_PATH
+  RESULTS_PATH SIGMORPHON_PATH...
 
 Arguments:
   TRAIN_PATH    destination path
@@ -27,6 +27,7 @@ Options:
   --learning=LEARNING           learning rate parameter for optimization
   --plot                        draw a learning curve plot while training each model
   --eval                        run evaluation without training
+  --own-alignments              uses own alignments
   --ensemble=ENSEMBLE           ensemble model paths, separated by comma
 """
 
@@ -69,11 +70,11 @@ ALIGN_SYMBOL = '~'
 
 
 def main(train_path, dev_path, test_path, results_file_path, sigmorphon_root_dir, input_dim, hidden_dim, feat_input_dim,
-         epochs, layers, optimization, regularization, learning_rate, plot, eval_only, ensemble):
+         epochs, layers, optimization, regularization, learning_rate, plot, eval_only, ensemble, own_align):
     hyper_params = {'INPUT_DIM': input_dim, 'HIDDEN_DIM': hidden_dim, 'FEAT_INPUT_DIM': feat_input_dim,
                     'EPOCHS': epochs, 'LAYERS': layers, 'MAX_PREDICTION_LEN': MAX_PREDICTION_LEN,
                     'OPTIMIZATION': optimization, 'PATIENCE': MAX_PATIENCE, 'REGULARIZATION': regularization,
-                    'LEARNING_RATE': learning_rate}
+                    'LEARNING_RATE': learning_rate, 'OWN_ALIGN': own_align}
 
     print 'train path = ' + str(train_path)
     print 'dev path =' + str(dev_path)
@@ -82,9 +83,21 @@ def main(train_path, dev_path, test_path, results_file_path, sigmorphon_root_dir
         print param + '=' + str(hyper_params[param])
 
     # load train and test data
-    (train_words, train_lemmas, train_feat_dicts) = prepare_sigmorphon_data.load_data(train_path)
-    (dev_words, dev_lemmas, dev_feat_dicts) = prepare_sigmorphon_data.load_data(dev_path)
-    (test_words, test_lemmas, test_feat_dicts) = prepare_sigmorphon_data.load_data(test_path)
+    train_aligned_pairs = None
+    if own_align:
+        (train_words, train_lemmas, train_aligned_pairs, train_feat_dicts, train_goods, train_answers) = \
+            common.load_preprocessed(train_path, filter_infeasible=True)
+        (_, dev_lemmas, dev_aligned_pairs, dev_feat_dicts, _, dev_words) = \
+            common.load_preprocessed(dev_path)
+        (_, test_lemmas, _, test_feat_dicts, _, test_words) = \
+            common.load_preprocessed(test_path)
+        dev_aligned_pairs = [x[0] for x in dev_aligned_pairs]
+        train_words = [x[0] for x in train_words]
+        train_aligned_pairs = [x[0] for x in train_aligned_pairs]
+    else:
+        (train_words, train_lemmas, train_feat_dicts) = prepare_sigmorphon_data.load_data(train_path)
+        (dev_words, dev_lemmas, dev_feat_dicts) = prepare_sigmorphon_data.load_data(dev_path)
+        (test_words, test_lemmas, test_feat_dicts) = prepare_sigmorphon_data.load_data(test_path)
     alphabet, feature_types = prepare_sigmorphon_data.get_alphabet(train_words, train_lemmas, train_feat_dicts)
 
     # used for character dropout
@@ -115,16 +128,19 @@ def main(train_path, dev_path, test_path, results_file_path, sigmorphon_root_dir
     if not eval_only:
 
         # align the words to the inflections, the alignment will later be used by the model
-        print 'started aligning'
-        train_word_pairs = zip(train_lemmas, train_words)
-        dev_word_pairs = zip(dev_lemmas, dev_words)
+        if own_align:
+            print 'using own alignment'
+        else:
+            print 'started aligning'
+            train_word_pairs = zip(train_lemmas, train_words)
+            dev_word_pairs = zip(dev_lemmas, dev_words)
 
-        # train_aligned_pairs = dumb_align(train_word_pairs, ALIGN_SYMBOL)
-        train_aligned_pairs = common.mcmc_align(train_word_pairs, ALIGN_SYMBOL)
+            # train_aligned_pairs = dumb_align(train_word_pairs, ALIGN_SYMBOL)
+            train_aligned_pairs = common.mcmc_align(train_word_pairs, ALIGN_SYMBOL)
 
-        # TODO: align together?
-        dev_aligned_pairs = common.mcmc_align(dev_word_pairs, ALIGN_SYMBOL)
-        print 'finished aligning'
+            # TODO: align together?
+            dev_aligned_pairs = common.mcmc_align(dev_word_pairs, ALIGN_SYMBOL)
+            print 'finished aligning'
 
         last_epochs = []
         trained_model, last_epoch = train_model_wrapper(input_dim, hidden_dim, layers, train_lemmas, train_feat_dicts,
@@ -960,13 +976,16 @@ if __name__ == '__main__':
         ensemble_param = arguments['--ensemble']
     else:
         ensemble_param = False
+    if arguments['--own-alignments']:
+        own_align_param = True
+    else:
+        own_align_param = False
 
     print arguments
 
     main(train_path_param, dev_path_param, test_path_param, results_file_path_param, sigmorphon_root_dir_param,
-         input_dim_param,
-         hidden_dim_param, feat_input_dim_param, epochs_param, layers_param, optimization_param, regularization_param,
-         learning_rate_param, plot_param, eval_param, ensemble_param)
+         input_dim_param, hidden_dim_param, feat_input_dim_param, epochs_param, layers_param, optimization_param,
+         regularization_param, learning_rate_param, plot_param, eval_param, ensemble_param, own_align_param)
 
 
 def encode_feats_and_chars(alphabet_index, char_lookup, encoder_frnn, encoder_rrnn, feat_index, feat_lookup, feats,
