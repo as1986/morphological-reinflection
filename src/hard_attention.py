@@ -4,7 +4,7 @@ files and evaluation script.
 Usage:
   hard_attention.py [--dynet-mem MEM][--input=INPUT] [--hidden=HIDDEN]
   [--feat-input=FEAT] [--epochs=EPOCHS] [--layers=LAYERS] [--optimization=OPTIMIZATION] [--reg=REGULARIZATION]
-  [--learning=LEARNING] [--plot] [--eval] [--ensemble=ENSEMBLE] TRAIN_PATH DEV_PATH TEST_PATH RESULTS_PATH
+  [--learning=LEARNING] [--plot] [--eval] [--init-epochs=INIT_EPOCHS] [--ensemble=ENSEMBLE] TRAIN_PATH DEV_PATH TEST_PATH RESULTS_PATH
   SIGMORPHON_PATH...
 
 Arguments:
@@ -27,7 +27,7 @@ Options:
   --learning=LEARNING           learning rate parameter for optimization
   --plot                        draw a learning curve plot while training each model
   --eval                        run evaluation without training
-  --init-epochs                 number of initialization epochs (i.e. epochs in which the original objective is being minimized)
+  --init-epochs=INIT_EPOCHS     number of initialization epochs (i.e. epochs in which the original objective is being minimized)
   --ensemble=ENSEMBLE           ensemble model paths, separated by comma
 """
 
@@ -327,7 +327,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                     continue
                 alignments = alignments[:goods]
                 words = words[:goods]
-            losses = []
+            log_likelihoods = []
             pc.renew_cg()
             expr_R = pc.parameter(R)
             expr_bias = pc.parameter(bias)
@@ -342,17 +342,19 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                                                               feature_types,
                                                               previous_blstm=prev_bilstm,
                                                               previous_lemma_vecs=prev_lemma)
-                loss = - loss
-                losses.append(loss)
+                log_likelihood = - loss
+                log_likelihoods.append(loglikelihood)
             # losses = [pc.exp(x) for x in losses]
             if e < init_epochs:
-                loss = - pc.logsumexp(losses)
+                nll = - pc.logsumexp(log_likelihoods)
             else:
                 if goods > 0:
-                    hope = losses[:goods]
-                    loss = - (pc.logsumexp(hope) - pc.logsumexp(losses))
+                    lls_hope = log_likelihoods[:goods]
+                    nll = - (pc.logsumexp(lls_hope) - pc.logsumexp(log_likelihoods))
                 else:
-                    loss = pc.logsumexp(losses)
+                    print 'no positive'
+                    nll = pc.logsumexp(log_likelihoods)
+            loss = nll
             loss_value = loss.value()
             print 'loss: {}'.format(loss_value)
             from numpy import isnan, isinf
@@ -372,7 +374,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             else:
                 avg_loss = total_loss
 
-        if EARLY_STOPPING:
+        if EARLY_STOPPING and not e <= init_epochs:
 
             # get train accuracy
             print 'evaluating on train...'
@@ -396,7 +398,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             dev_accuracy = 0
             avg_dev_loss = 0
 
-            if len(dev_lemmas) > 0 and False:
+            if len(dev_lemmas) > 0:
 
                 # get dev accuracy
                 dev_predictions = rerank_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
@@ -825,7 +827,7 @@ def predict_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, en
 
 def rerank(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn,
                   alphabet_index, feat_index, feature_types, lemma, feats, words, alignments):
-    from numpy import argmax, arange, isnan, isinf
+    from numpy import argmin, arange, isnan, isinf
     from numpy.random import shuffle
     losses = []
     order = arange(len(alignments))
@@ -846,7 +848,7 @@ def rerank(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
     # print 'losses: {}'.format(losses)
     assert not any(isnan(losses))
     assert not any(isinf(losses))
-    return words[order[argmax(losses)]]
+    return words[order[argmin(losses)]]
 
 
 def rerank_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, alphabet_index,
