@@ -325,8 +325,6 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             if e < init_epochs:
                 if goods <= 0:
                     continue
-                alignments = alignments[:goods]
-                words = words[:goods]
             losses = []
             pc.renew_cg()
             expr_R = pc.parameter(R)
@@ -346,7 +344,9 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                 losses.append(loss)
             # losses = [pc.exp(x) for x in losses]
             if e < init_epochs:
-                loss = - pc.logsumexp(losses)
+                coeff = float(e) / init_epochs
+                hope = losses[:goods]
+                loss = - (pc.logsumexp(hope) - coeff * pc.logsumexp(losses))
             else:
                 if goods > 0:
                     hope = losses[:goods]
