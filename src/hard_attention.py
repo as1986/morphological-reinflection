@@ -347,6 +347,9 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             # losses = [pc.exp(x) for x in losses]
             if e < init_epochs:
                 nll = - pc.logsumexp(log_likelihoods)
+                coeff = float(e) / init_epochs
+                hope = log_likelihoods[:goods]
+                loss = - (pc.logsumexp(hope) - nll * coeff)
             else:
                 if goods > 0:
                     lls_hope = log_likelihoods[:goods]
