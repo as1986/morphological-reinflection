@@ -95,9 +95,12 @@ def main(train_path, dev_path, test_path, results_file_path, sigmorphon_root_dir
         train_words = [x[0] for x in train_words]
         train_aligned_pairs = [x[0] for x in train_aligned_pairs]
     else:
-        (train_words, train_lemmas, train_feat_dicts) = prepare_sigmorphon_data.load_data(train_path)
-        (dev_words, dev_lemmas, dev_feat_dicts) = prepare_sigmorphon_data.load_data(dev_path)
-        (test_words, test_lemmas, test_feat_dicts) = prepare_sigmorphon_data.load_data(test_path)
+        (_, train_lemmas, _, train_feat_dicts, _, train_words) = \
+            common.load_preprocessed(train_path,)
+        (_, dev_lemmas, _, dev_feat_dicts, _, dev_words) = \
+            common.load_preprocessed(dev_path,)
+        (_, test_lemmas, _, test_feat_dicts, _, test_words) = \
+            common.load_preprocessed(test_path,)
     alphabet, feature_types = prepare_sigmorphon_data.get_alphabet(train_words, train_lemmas, train_feat_dicts)
 
     # used for character dropout
