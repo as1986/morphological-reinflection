@@ -402,7 +402,9 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                 # FIXME
                 assert False
             clamped_log_likelihoods = []
+            clamped_weights = []
             free_log_likelihoods = []
+            free_weights = []
             pc.renew_cg()
             expr_R = pc.parameter(R)
             expr_bias = pc.parameter(bias)
@@ -421,8 +423,8 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                                        feats, word, alphabet_index,
                                        alignment, feat_index,
                                        feature_types)
-                log_likelihood = loss * pc.exp( loss + clamped_sample['weight'])
-                clamped_log_likelihoods.append(log_likelihood)
+                clamped_log_likelihoods.append(loss)
+                clamped_weights.append(loss - clamped_sample['weight'])
 
             for free_sample in free_samples:
                 alignment = free_sample['alignment']
@@ -432,13 +434,8 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                                        feats, word, alphabet_index,
                                        alignment, feat_index,
                                        feature_types)
-                print 'loss: {}'.format(loss.value())
-                print 'free sample weight {}'.format(free_sample['weight'])
-                loss = loss + free_sample['weight']
-                print 'log weight: {}'.format(loss.value())
-                print 'weight: {}'.format(pc.exp( loss ).value())
-                log_likelihood = loss * pc.exp( loss + free_sample['weight'])
-                free_log_likelihoods.append(log_likelihood)
+                free_log_likelihoods.append(loss)
+                free_weights.append(loss - free_sample['weight'])
             if e < init_epochs:
                 # FIXME
                 assert False
@@ -447,10 +444,15 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                 hope = clamped_log_likelihoods[:goods]
                 loss = - (pc.logsumexp(hope) - nll * coeff)
             else:
-                clamped_value = pc.average(clamped_log_likelihoods).value()
-                free_value = pc.average(free_log_likelihoods).value()
-                print 'clamped: {} free: {}'.format(clamped_value, free_value)
-                loss = - (pc.average(clamped_log_likelihoods) - pc.average(free_log_likelihoods))
+                clamped_weighted_ll = []
+                clamped_weight_sum = pc.logsumexp(clamped_weights)
+                for ll, w in zip(clamped_log_likelihoods, clamped_weights):
+                    clamped_weighted_ll.append(ll * pc.exp(w - clamped_weight_sum))
+                free_weighted_ll = []
+                free_weight_sum = pc.logsumexp(free_weights)
+                for ll, w in zip(free_log_likelihoods, free_weights):
+                    free_weighted_ll.append(ll * pc.exp(w - free_weight_sum))
+                loss = - (pc.average(clamped_weighted_ll) - pc.average(free_weighted_ll))
             loss_value = loss.value()
             print 'loss: {}'.format(loss_value)
             from numpy import isnan, isinf
