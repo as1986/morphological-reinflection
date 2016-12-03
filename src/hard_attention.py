@@ -4,8 +4,7 @@ files and evaluation script.
 Usage:
   hard_attention.py [--dynet-mem MEM][--input=INPUT] [--hidden=HIDDEN]
   [--feat-input=FEAT] [--epochs=EPOCHS] [--layers=LAYERS] [--optimization=OPTIMIZATION] [--reg=REGULARIZATION]
-  [--learning=LEARNING] [--plot] [--eval] [--init-epochs=INIT_EPOCHS] [--ensemble=ENSEMBLE] TRAIN_PATH DEV_PATH TEST_PATH RESULTS_PATH
-  SIGMORPHON_PATH...
+  [--learning=LEARNING] [--plot] [--eval] [--init-epochs=INIT_EPOCHS] [--ensemble=ENSEMBLE] TRAIN_PATH DEV_PATH TEST_PATH RESULTS_PATH SIGMORPHON_PATH SYMS_PATH
 
 Arguments:
   TRAIN_PATH    destination path
@@ -276,7 +275,7 @@ def log_to_file(file_name, e, avg_loss, train_accuracy, dev_accuracy):
 
 
 def read_fst(lemma, inv_sigma, dir, syms):
-    fname = dir + '/' + '.'.join([inv_sigma[x] for x in lemma]) + '.fst'
+    fname = dir + '/' + '.'.join([str(inv_sigma[x]) for x in lemma]) + '.fst'
     machine = fst.read(fname)
     machine.isyms = syms
     machine.osyms = syms
@@ -323,7 +322,7 @@ def sample(machine, sigma, num=64, inv_tau=1.):
         iseq = [sigma[x] if x != 0 else '~' for x in iseq]
         oseq = [sigma[x] if x != 0 else '~' for x in oseq]
         word = [x for x in oseq if x != '~']
-        paths[i] = {'weight': path_prob, 'alignment': zip(iseq, oseq), 'word': word}
+        paths.append({'weight': path_prob, 'alignment': (iseq, oseq), 'word': word})
     return paths
 
 
@@ -343,17 +342,13 @@ def read_syms(syms_file):
     return sigma, inv_sigma, syms
 
 
-def sample_clamped(lemma, answer):
-    return
-
-
 def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, train_lemmas,
                 train_feat_dicts, dev_lemmas, dev_feat_dicts, alphabet_index,
                 inverse_alphabet_index, epochs, optimization, results_file_path,
                 feat_index, feature_types, plot, train_answers, dev_answers, init_epochs, syms_file):
     print 'training...'
     sigma, inv_sigma, syms = read_syms(syms_file)
-    fst_dir = '/home/as1986/fst_dir'
+    fst_dir = '/export/a10/kitsing/ryanouts/ryanout-2PKE-z-0/train/'
 
     np.random.seed(17)
     random.seed(17)
@@ -413,10 +408,10 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             expr_bias = pc.parameter(bias)
             prev_bilstm = None
             prev_lemma = None
-            num_clamped_samples = 1
-            num_free_samples = 1
-            clamped_samples = sample(clamped_fst, sigma, num_clamped_samples, inv_tau=1.)
-            free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=1.)
+            num_clamped_samples = 3
+            num_free_samples = 3
+            clamped_samples = sample(clamped_fst, sigma, num_clamped_samples, inv_tau=3e-3)
+            free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=3e-3)
 
             for clamped_sample in clamped_samples:
                 alignment = clamped_sample['alignment']
@@ -437,6 +432,11 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                                        feats, word, alphabet_index,
                                        alignment, feat_index,
                                        feature_types)
+                print 'loss: {}'.format(loss.value())
+                print 'free sample weight {}'.format(free_sample['weight'])
+                loss = loss + free_sample['weight']
+                print 'log weight: {}'.format(loss.value())
+                print 'weight: {}'.format(pc.exp( loss ).value())
                 log_likelihood = loss * pc.exp( loss + free_sample['weight'])
                 free_log_likelihoods.append(log_likelihood)
             if e < init_epochs:
@@ -447,6 +447,9 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                 hope = clamped_log_likelihoods[:goods]
                 loss = - (pc.logsumexp(hope) - nll * coeff)
             else:
+                clamped_value = pc.average(clamped_log_likelihoods).value()
+                free_value = pc.average(free_log_likelihoods).value()
+                print 'clamped: {} free: {}'.format(clamped_value, free_value)
                 loss = - (pc.average(clamped_log_likelihoods) - pc.average(free_log_likelihoods))
             loss_value = loss.value()
             print 'loss: {}'.format(loss_value)
@@ -1163,7 +1166,7 @@ if __name__ == '__main__':
     if arguments['SYMS_PATH']:
         syms_file = arguments['SYMS_PATH']
     else:
-        syms_file = '/home/as1986/sigma.txt'
+        syms_file = '/export/a10/kitsing/fsts/13SIA-13SKE_0/fsts/train/sigma.txt'
 
     if arguments['--input']:
         input_dim_param = int(arguments['--input'])
