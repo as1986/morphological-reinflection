@@ -408,21 +408,20 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             pc.renew_cg()
             expr_R = pc.parameter(R)
             expr_bias = pc.parameter(bias)
-            prev_bilstm = None
-            prev_lemma = None
             num_clamped_samples = 3
             num_free_samples = 3
             clamped_samples = sample(clamped_fst, sigma, num_clamped_samples, inv_tau=3e-3)
             free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=3e-3)
-
+            padded_lemma = BEGIN_WORD + lemma + END_WORD
+            lemma_char_vecs = encode_lemma(alphabet_index, char_lookup, padded_lemma)
+            blstm_outputs = bilstm_transduce(encoder_frnn, encoder_rrnn, lemma_char_vecs)
             for clamped_sample in clamped_samples:
                 alignment = clamped_sample['alignment']
                 loss = - one_word_loss(model, char_lookup, feat_lookup,
-                                       expr_R, expr_bias, encoder_frnn,
-                                       encoder_rrnn, decoder_rnn, lemma,
+                                       expr_R, expr_bias, decoder_rnn, padded_lemma,
                                        feats, word, alphabet_index,
                                        alignment, feat_index,
-                                       feature_types)
+                                       feature_types, blstm_outputs=blstm_outputs)
                 clamped_log_likelihoods.append(loss)
                 # print loss.value()
                 clamped_weights.append(loss - clamped_sample['weight'])
@@ -431,11 +430,10 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             for free_sample in free_samples:
                 alignment = free_sample['alignment']
                 loss = - one_word_loss(model, char_lookup, feat_lookup,
-                                       expr_R, expr_bias, encoder_frnn,
-                                       encoder_rrnn, decoder_rnn, lemma,
+                                       expr_R, expr_bias, decoder_rnn, padded_lemma,
                                        feats, word, alphabet_index,
                                        alignment, feat_index,
-                                       feature_types)
+                                       feature_types, blstm_outputs=blstm_outputs)
                 free_log_likelihoods.append(loss)
                 free_weights.append(loss - free_sample['weight'])
             if e < init_epochs:
@@ -619,9 +617,9 @@ def save_pycnn_model(model, results_file_path):
 
 
 # noinspection PyPep8Naming,PyUnusedLocal,PyUnusedLocal,PyUnusedLocal,PyUnusedLocal,PyUnusedLocal,PyUnusedLocal
-def one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, word,
+def one_word_loss(model, char_lookup, feat_lookup, R, bias, decoder_rnn, padded_lemma, feats, word,
                   alphabet_index, aligned_pair,
-                  feat_index, feature_types):
+                  feat_index, feature_types, encoder_frnn=None, encoder_rrnn=None, blstm_outputs=None):
     from numpy import isnan, isinf
     # pc.renew_cg()
 
@@ -633,7 +631,7 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
     # R = pc.parameter(R)
     # bias = pc.parameter(bias)
 
-    padded_lemma = BEGIN_WORD + lemma + END_WORD
+    # padded_lemma = BEGIN_WORD + lemma + END_WORD
 
     # convert features to matching embeddings, if UNK handle properly
     feat_vecs = encode_feats(feat_index, feat_lookup, feats, feature_types)
@@ -641,8 +639,9 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
     feats_input = pc.concatenate(feat_vecs)
 
     # convert characters to matching embeddings
-    lemma_char_vecs = encode_lemma(alphabet_index, char_lookup, padded_lemma)
-    blstm_outputs = bilstm_transduce(encoder_frnn, encoder_rrnn, lemma_char_vecs)
+    if blstm_outputs is None:
+        lemma_char_vecs = encode_lemma(alphabet_index, char_lookup, padded_lemma)
+        blstm_outputs = bilstm_transduce(encoder_frnn, encoder_rrnn, lemma_char_vecs)
 
     # initialize the decoder rnn
     s_0 = decoder_rnn.initial_state()
@@ -768,7 +767,7 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
     if any(isnan(check_l)) or any(isinf(check_l)):
         print 'one_word_loss assertion failed!'
         print check_l
-        print lemma
+        print padded_lemma
         print word
         print aligned_pair
         assert False
@@ -937,10 +936,11 @@ def rerank(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
         pc.renew_cg()
         expr_R = pc.parameter(R)
         expr_bias = pc.parameter(bias)
-        loss, prev_blstm, prev_lemma = one_word_loss(model, char_lookup, feat_lookup, expr_R, expr_bias, encoder_frnn,
-                                                     encoder_rrnn, decoder_rnn, lemma, feats, word,
-                                                     alphabet_index, alignment, feat_index, feature_types,
-                                                     previous_blstm=prev_blstm, previous_lemma_vecs=prev_lemma)
+        padded_lemma = BEGIN_WORD + lemma + END_WORD
+        # FIXME
+        loss = one_word_loss(model, char_lookup, feat_lookup, expr_R, expr_bias, encoder_frnn,
+                                                     encoder_rrnn, decoder_rnn, padded_lemma, feats, word,
+                                                     alphabet_index, alignment, feat_index, feature_types)
         losses.append(loss.value())
     # print 'losses: {}'.format(losses)
     assert not any(isnan(losses))
@@ -962,6 +962,7 @@ def sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
     order = np.arange(num_free_samples)
     shuffle(order)
     crunched_dict = {}
+    padded_lemma = BEGIN_WORD + lemma + END_WORD
     for i in order:
         alignment = free_samples[i]['alignment']
         word = word_from_alignment(alignment)
@@ -969,9 +970,9 @@ def sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
         pc.renew_cg()
         expr_R = pc.parameter(R)
         expr_bias = pc.parameter(bias)
-        loss = one_word_loss(model, char_lookup, feat_lookup, expr_R, expr_bias, encoder_frnn,
-                             encoder_rrnn, decoder_rnn, lemma, feats, word,
-                             alphabet_index, alignment, feat_index, feature_types)
+        loss = one_word_loss(model, char_lookup, feat_lookup, expr_R, expr_bias, decoder_rnn, padded_lemma, feats, word,
+                             alphabet_index, alignment, feat_index, feature_types, encoder_frnn=encoder_frnn,
+                             encoder_rrnn=encoder_rrnn)
         l = - loss.value()
         corrected = l - weight
         if word not in crunched_dict:
