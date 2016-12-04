@@ -410,8 +410,8 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             expr_bias = pc.parameter(bias)
             prev_bilstm = None
             prev_lemma = None
-            num_clamped_samples = 3
-            num_free_samples = 3
+            num_clamped_samples = 30
+            num_free_samples = 30
             clamped_samples = sample(clamped_fst, sigma, num_clamped_samples, inv_tau=3e-3)
             free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=3e-3)
 
@@ -424,7 +424,9 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                                        alignment, feat_index,
                                        feature_types)
                 clamped_log_likelihoods.append(loss)
+                # print loss.value()
                 clamped_weights.append(loss - clamped_sample['weight'])
+                # print (loss - clamped_sample['weight']).value()
 
             for free_sample in free_samples:
                 alignment = free_sample['alignment']
@@ -446,8 +448,15 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             else:
                 clamped_weighted_ll = []
                 clamped_weight_sum = pc.logsumexp(clamped_weights)
+                # print clamped_weight_sum.value()
                 for ll, w in zip(clamped_log_likelihoods, clamped_weights):
                     clamped_weighted_ll.append(ll * pc.exp(w - clamped_weight_sum))
+                # print 'clamped weights: {}'.format([x.value() for x in clamped_weights])
+                # print 'sum: {}'.format(clamped_weight_sum.value())
+                # c_max = pc.emax(clamped_weights)
+                # lsumexp = pc.esum([pc.exp(x-c_max) for x in clamped_weights])
+                # print 'sum 2: {}'.format(lsumexp.value())
+                # print 'normalized {}'.format((w - clamped_weight_sum).value())
                 free_weighted_ll = []
                 free_weight_sum = pc.logsumexp(free_weights)
                 for ll, w in zip(free_log_likelihoods, free_weights):
@@ -457,7 +466,8 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             print 'loss: {}'.format(loss_value)
             from numpy import isnan, isinf
             if isnan(loss_value) or isinf(loss_value):
-                print 'losses: {}'.format([x.value() for x in losses])
+                print 'losses: {}'.format([x.value() for x in clamped_weighted_ll])
+                print 'losses: {}'.format([x.value() for x in free_weighted_ll])
                 assert False
             # losses_concat = pc.concatenate(losses)
             # losses_concat = pc.exp(losses_concat - maximum)
