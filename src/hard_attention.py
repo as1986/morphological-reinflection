@@ -176,14 +176,14 @@ def main(train_path, dev_path, test_path, results_file_path, sigmorphon_root_dir
         evaluate_ndst(alphabet, alphabet_index, ensemble, feat_index, feat_input_dim, feature_alphabet, feature_types,
                       hidden_dim, hyper_params, input_dim, inverse_alphabet_index, layers, results_file_path,
                       sigmorphon_root_dir, dev_feat_dicts, dev_lemmas, dev_path,
-                      dev_words, train_path)
+                      dev_answers, train_path)
 
         # eval on test
         print '=========TEST EVALUATION:========='
         evaluate_ndst(alphabet, alphabet_index, ensemble, feat_index, feat_input_dim, feature_alphabet, feature_types,
                       hidden_dim, hyper_params, input_dim, inverse_alphabet_index, layers, results_file_path,
                       sigmorphon_root_dir, test_feat_dicts, test_lemmas, test_path,
-                      test_words, train_path)
+                      dev_answers, train_path)
 
     return
 
@@ -211,14 +211,11 @@ def train_model_wrapper(input_dim, hidden_dim, layers, train_lemmas, train_feat_
                                             plot, train_answers, dev_answers, init_epochs, syms_file)
 
     # evaluate last model on dev
-    predicted_sequences = rerank_sequences(trained_model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
-                                           decoder_rnn, alphabet_index,
-                                           inverse_alphabet_index, dev_lemmas, dev_words, dev_feat_dicts,
-                                           dev_aligned_pairs,
-                                           feat_index,
-                                           feature_types)
+    predicted_sequences = sample_decode_sequences(trained_model, char_lookup, feat_lookup, R, bias, encoder_frnn,
+                                                  encoder_rrnn, decoder_rnn, alphabet_index, inverse_alphabet_index,
+                                                  dev_lemmas, dev_feat_dicts, feat_index, feature_types)
     if len(predicted_sequences) > 0:
-        evaluate_model(predicted_sequences, dev_lemmas, dev_feat_dicts, dev_words, feature_types, print_results=False)
+        evaluate_model(predicted_sequences, dev_lemmas, dev_feat_dicts, dev_answers, feature_types, print_results=False)
     else:
         print 'no examples in dev set to evaluate'
 
@@ -487,14 +484,11 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
 
             # get train accuracy
             print 'evaluating on train...'
-            train_predictions = rerank_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
-                                                 decoder_rnn, alphabet_index,
-                                                 inverse_alphabet_index, train_lemmas[:sanity_set_size],
-                                                 train_words[:sanity_set_size],
-                                                 train_feat_dicts[:sanity_set_size],
-                                                 train_aligned_pairs[:sanity_set_size],
-                                                 feat_index,
-                                                 feature_types)
+            train_predictions = sample_decode_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn,
+                                                        encoder_rrnn, decoder_rnn, alphabet_index,
+                                                        inverse_alphabet_index, train_lemmas[:sanity_set_size],
+                                                        train_feat_dicts[:sanity_set_size], feat_index, feature_types,
+                                                        sigma, inv_sigma, fst_dir, syms)
 
             train_accuracy = evaluate_model(train_predictions, train_lemmas[:sanity_set_size],
                                             train_feat_dicts[:sanity_set_size],
@@ -510,14 +504,10 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             if len(dev_lemmas) > 0:
 
                 # get dev accuracy
-                dev_predictions = rerank_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
-                                                   decoder_rnn, alphabet_index,
-                                                   inverse_alphabet_index, dev_lemmas,
-                                                   dev_words,
-                                                   dev_feat_dicts,
-                                                   dev_aligned_pairs,
-                                                   feat_index,
-                                                   feature_types)
+                dev_predictions = sample_decode_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn,
+                                                          encoder_rrnn, decoder_rnn, alphabet_index,
+                                                          inverse_alphabet_index, dev_lemmas, dev_feat_dicts,
+                                                          feat_index, feature_types, sigma, inv_sigma, fst_dir, syms)
                 print 'evaluating on dev...'
                 # get dev accuracy
                 dev_accuracy = evaluate_model(dev_predictions, dev_lemmas, dev_feat_dicts, dev_answers,
@@ -955,13 +945,56 @@ def rerank(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
     return words[order[argmin(losses)]]
 
 
-def rerank_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, alphabet_index,
-                     inverse_alphabet_index, lemmas, lemma_words, feats, lemma_alignments, feat_index, feature_types):
-    predictions = {}
-    for i, (lemma, words, alignments, feat_dict) in enumerate(zip(lemmas, lemma_words, lemma_alignments, feats)):
+def word_from_alignment(alignment):
+    return ''.join([unicode(x) for x in alignment[1] if x != '~'])
 
-        predicted_sequence = rerank(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn,
-                                    alphabet_index, feat_index, feature_types, lemma, feats, words, alignments)
+
+def sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn,
+                  alphabet_index, feat_index, feature_types, lemma, feats, sigma, inv_sigma, fst_dir, syms):
+    from scipy.misc import logsumexp
+    from numpy.random import shuffle
+    free_fst = read_fst(lemma, inv_sigma, fst_dir, syms)
+    num_free_samples=30
+    free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=3e-3)
+    order = np.arange(num_free_samples)
+    shuffle(order)
+    crunched_dict = {}
+    for i in order:
+        alignment = free_samples[i]['alignment']
+        word = word_from_alignment(alignment)
+        weight = free_samples[i]['weight']
+        pc.renew_cg()
+        expr_R = pc.parameter(R)
+        expr_bias = pc.parameter(bias)
+        loss = one_word_loss(model, char_lookup, feat_lookup, expr_R, expr_bias, encoder_frnn,
+                             encoder_rrnn, decoder_rnn, lemma, feats, word,
+                             alphabet_index, alignment, feat_index, feature_types)
+        l = - loss.value()
+        corrected = l - weight
+        if word not in crunched_dict:
+            crunched_dict[word] = [corrected]
+        else:
+            crunched_dict[word] += [corrected]
+    largest_sum = None
+    largest = None
+    for w, l in crunched_dict.iteritems():
+        s = logsumexp(l)
+        if largest is None or s > largest_sum:
+            largest = w
+            largest_sum = s
+    return largest
+
+
+def sample_decode_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn,
+                            alphabet_index, inverse_alphabet_index, lemmas, feats, feat_index, feature_types, sigma,
+                            inv_sigma, fst_dir, syms):
+    predictions = {}
+    for i, (lemma, feat_dict) in enumerate(zip(lemmas, feats)):
+
+        predicted_sequence = sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
+                                           decoder_rnn,
+                                           alphabet_index, feat_index, feature_types, lemma, feats,
+                                           sigma, inv_sigma, fst_dir, syms)
 
         # index each output by its matching inputs - lemma + features
         joint_index = lemma + ':' + common.get_morph_string(feat_dict, feature_types)
