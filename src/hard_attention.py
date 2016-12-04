@@ -238,12 +238,15 @@ def build_model(alphabet, input_dim, hidden_dim, layers, feature_types, feat_inp
     bias = model.add_parameters(len(alphabet))
 
     # rnn's
-    encoder_frnn = pc.LSTMBuilder(layers, input_dim, hidden_dim, model)
-    encoder_rrnn = pc.LSTMBuilder(layers, input_dim, hidden_dim, model)
+    # encoder_frnn = pc.LSTMBuilder(layers, input_dim, hidden_dim, model)
+    encoder_frnn = pc.GRUBuilder(layers, input_dim, hidden_dim, model)
+    # encoder_rrnn = pc.LSTMBuilder(layers, input_dim, hidden_dim, model)
+    encoder_rrnn = pc.GRUBuilder(layers, input_dim, hidden_dim, model)
 
     # 2 * HIDDEN_DIM + input_dim, as it gets BLSTM[i], previous output
     concatenated_input_dim = 2 * hidden_dim + input_dim + len(feature_types) * feat_input_dim
-    decoder_rnn = pc.LSTMBuilder(layers, concatenated_input_dim, hidden_dim, model)
+    # decoder_rnn = pc.LSTMBuilder(layers, concatenated_input_dim, hidden_dim, model)
+    decoder_rnn = pc.GRUBuilder(layers, concatenated_input_dim, hidden_dim, model)
     print 'decoder lstm dimensions are {} x {}'.format(concatenated_input_dim, hidden_dim)
     print 'finished creating model'
 
@@ -407,8 +410,8 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             expr_bias = pc.parameter(bias)
             prev_bilstm = None
             prev_lemma = None
-            num_clamped_samples = 30
-            num_free_samples = 30
+            num_clamped_samples = 3
+            num_free_samples = 3
             clamped_samples = sample(clamped_fst, sigma, num_clamped_samples, inv_tau=3e-3)
             free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=3e-3)
 
@@ -458,7 +461,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                 free_weight_sum = pc.logsumexp(free_weights)
                 for ll, w in zip(free_log_likelihoods, free_weights):
                     free_weighted_ll.append(ll * pc.exp(w - free_weight_sum))
-                loss = - (pc.average(clamped_weighted_ll) - pc.average(free_weighted_ll))
+                loss = - (pc.esum(clamped_weighted_ll) - pc.esum(free_weighted_ll)) / num_free_samples
             loss_value = loss.value()
             print 'loss: {}'.format(loss_value)
             from numpy import isnan, isinf
@@ -480,7 +483,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                 avg_loss = total_loss
 
         # FIXME
-        if EARLY_STOPPING and not e <= init_epochs and False:
+        if EARLY_STOPPING and e >= init_epochs:
 
             # get train accuracy
             print 'evaluating on train...'
@@ -672,7 +675,7 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
                                         feats_input])
 
         d_check = decoder_input.npvalue()
-        assert not any(isnan(d_check)), (d_check, feats_input.npvalue(), prev_output_vec.npvalue())
+        assert not any(isnan(d_check)), (d_check, feats_input.npvalue(), prev_output_vec.npvalue(), index, input_char, output_char)
         assert not any(isinf(d_check)), (d_check, feats_input.npvalue(), prev_output_vec.npvalue())
         # if reached the end word symbol
         if output_char == END_WORD:
