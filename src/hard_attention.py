@@ -238,15 +238,16 @@ def build_model(alphabet, input_dim, hidden_dim, layers, feature_types, feat_inp
     bias = model.add_parameters(len(alphabet))
 
     # rnn's
-    # encoder_frnn = pc.LSTMBuilder(layers, input_dim, hidden_dim, model)
-    encoder_frnn = pc.GRUBuilder(layers, input_dim, hidden_dim, model)
-    # encoder_rrnn = pc.LSTMBuilder(layers, input_dim, hidden_dim, model)
-    encoder_rrnn = pc.GRUBuilder(layers, input_dim, hidden_dim, model)
+    encoder_frnn = pc.LSTMBuilder(layers, input_dim, hidden_dim, model)
+    # encoder_frnn = pc.SimpleRNNBuilder(layers, input_dim, hidden_dim, model)
+    encoder_rrnn = pc.LSTMBuilder(layers, input_dim, hidden_dim, model)
+    # encoder_rrnn = pc.SimpleRNNBuilder(layers, input_dim, hidden_dim, model)
 
     # 2 * HIDDEN_DIM + input_dim, as it gets BLSTM[i], previous output
-    concatenated_input_dim = 2 * hidden_dim + input_dim + len(feature_types) * feat_input_dim
-    # decoder_rnn = pc.LSTMBuilder(layers, concatenated_input_dim, hidden_dim, model)
-    decoder_rnn = pc.GRUBuilder(layers, concatenated_input_dim, hidden_dim, model)
+    # FIXME
+    concatenated_input_dim = 2 * hidden_dim + input_dim # + len(feature_types) * feat_input_dim
+    decoder_rnn = pc.LSTMBuilder(layers, concatenated_input_dim, hidden_dim, model)
+    # decoder_rnn = pc.SimpleRNNBuilder(layers, concatenated_input_dim, hidden_dim, model)
     print 'decoder lstm dimensions are {} x {}'.format(concatenated_input_dim, hidden_dim)
     print 'finished creating model'
 
@@ -349,12 +350,13 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
     print 'training...'
     sigma, inv_sigma, syms = read_syms(syms_file)
     fst_dir = '/export/a10/kitsing/ryanouts/ryanout-2PKE-z-0/train/'
+    dev_fst_dir = '/export/a10/kitsing/ryanouts/ryanout-2PKE-z-0/dev/'
 
     np.random.seed(17)
     random.seed(17)
 
     if optimization == 'ADAM':
-        trainer = pc.AdamTrainer(model, lam=REGULARIZATION, alpha=LEARNING_RATE, beta_1=0.9, beta_2=0.999, eps=1e-8)
+        trainer = pc.AdamTrainer(model, alpha=LEARNING_RATE, beta_1=0.9, beta_2=0.999, eps=1e-8)
     elif optimization == 'MOMENTUM':
         trainer = pc.MomentumSGDTrainer(model)
     elif optimization == 'SGD':
@@ -408,29 +410,30 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             pc.renew_cg()
             expr_R = pc.parameter(R)
             expr_bias = pc.parameter(bias)
-            num_clamped_samples = 3
-            num_free_samples = 3
-            clamped_samples = sample(clamped_fst, sigma, num_clamped_samples, inv_tau=3e-3)
-            free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=3e-3)
+            num_clamped_samples = 64
+            num_free_samples = 128
+            clamped_samples = sample(clamped_fst, sigma, num_clamped_samples, inv_tau=3e-1)
+            free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=3e-1)
             padded_lemma = BEGIN_WORD + lemma + END_WORD
             lemma_char_vecs = encode_lemma(alphabet_index, char_lookup, padded_lemma)
             blstm_outputs = bilstm_transduce(encoder_frnn, encoder_rrnn, lemma_char_vecs)
+            decoder_init = decoder_rnn.initial_state()
             for clamped_sample in clamped_samples:
                 alignment = clamped_sample['alignment']
                 loss = - one_word_loss(model, char_lookup, feat_lookup,
-                                       expr_R, expr_bias, decoder_rnn, padded_lemma,
+                                       expr_R, expr_bias, decoder_init, padded_lemma,
                                        feats, word, alphabet_index,
                                        alignment, feat_index,
                                        feature_types, blstm_outputs=blstm_outputs)
                 clamped_log_likelihoods.append(loss)
-                # print loss.value()
+                print 'clamped: {}'.format(loss.value())
                 clamped_weights.append(loss - clamped_sample['weight'])
                 # print (loss - clamped_sample['weight']).value()
 
             for free_sample in free_samples:
                 alignment = free_sample['alignment']
                 loss = - one_word_loss(model, char_lookup, feat_lookup,
-                                       expr_R, expr_bias, decoder_rnn, padded_lemma,
+                                       expr_R, expr_bias, decoder_init, padded_lemma,
                                        feats, word, alphabet_index,
                                        alignment, feat_index,
                                        feature_types, blstm_outputs=blstm_outputs)
@@ -459,7 +462,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                 free_weight_sum = pc.logsumexp(free_weights)
                 for ll, w in zip(free_log_likelihoods, free_weights):
                     free_weighted_ll.append(ll * pc.exp(w - free_weight_sum))
-                loss = - (pc.esum(clamped_weighted_ll) - pc.esum(free_weighted_ll)) / num_free_samples
+                loss = - (pc.average(clamped_weighted_ll) - pc.average(free_weighted_ll))
             loss_value = loss.value()
             print 'loss: {}'.format(loss_value)
             from numpy import isnan, isinf
@@ -508,7 +511,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                 dev_predictions = sample_decode_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn,
                                                           encoder_rrnn, decoder_rnn, alphabet_index,
                                                           inverse_alphabet_index, dev_lemmas, dev_feat_dicts,
-                                                          feat_index, feature_types, sigma, inv_sigma, fst_dir, syms)
+                                                          feat_index, feature_types, sigma, inv_sigma, dev_fst_dir, syms)
                 print 'evaluating on dev...'
                 # get dev accuracy
                 dev_accuracy = evaluate_model(dev_predictions, dev_lemmas, dev_feat_dicts, dev_answers,
@@ -617,7 +620,7 @@ def save_pycnn_model(model, results_file_path):
 
 
 # noinspection PyPep8Naming,PyUnusedLocal,PyUnusedLocal,PyUnusedLocal,PyUnusedLocal,PyUnusedLocal,PyUnusedLocal
-def one_word_loss(model, char_lookup, feat_lookup, R, bias, decoder_rnn, padded_lemma, feats, word,
+def one_word_loss(model, char_lookup, feat_lookup, R, bias, decoder_init, padded_lemma, feats, word,
                   alphabet_index, aligned_pair,
                   feat_index, feature_types, encoder_frnn=None, encoder_rrnn=None, blstm_outputs=None):
     from numpy import isnan, isinf
@@ -634,9 +637,10 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, decoder_rnn, padded_
     # padded_lemma = BEGIN_WORD + lemma + END_WORD
 
     # convert features to matching embeddings, if UNK handle properly
-    feat_vecs = encode_feats(feat_index, feat_lookup, feats, feature_types)
+    # FIXME
+    # feat_vecs = encode_feats(feat_index, feat_lookup, feats, feature_types)
 
-    feats_input = pc.concatenate(feat_vecs)
+    # feats_input = pc.concatenate(feat_vecs)
 
     # convert characters to matching embeddings
     if blstm_outputs is None:
@@ -644,7 +648,7 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, decoder_rnn, padded_
         blstm_outputs = bilstm_transduce(encoder_frnn, encoder_rrnn, lemma_char_vecs)
 
     # initialize the decoder rnn
-    s_0 = decoder_rnn.initial_state()
+    s_0 = decoder_init
     s = s_0
 
     # set prev_output_vec for first lstm step as BEGIN_WORD
@@ -665,16 +669,21 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, decoder_rnn, padded_
     bias = bias
 
     # run through the alignments
+    # print 'blstm: {}'.format([x.value() for x in blstm_outputs])
     for index, (input_char, output_char) in enumerate(zip(aligned_lemma, aligned_word)):
         possible_outputs = []
 
         # feedback, feedback char, blstm[i], feats
         decoder_input = pc.concatenate([prev_output_vec,
                                         blstm_outputs[i],
-                                        feats_input])
+                                        ])
 
         d_check = decoder_input.npvalue()
-        assert not any(isnan(d_check)), (d_check, feats_input.npvalue(), prev_output_vec.npvalue(), index, input_char, output_char)
+        assert not any(isnan(d_check)), (d_check, prev_output_vec.value(), index, '\ninput\n', input_char, '\noutput\n', output_char,
+                                         '\nbilstm\n',
+                                         [x.value() for x in blstm_outputs], 
+                                         '\nchar_lookup\n',
+                                         [char_lookup[x].value() for x in alphabet_index.values()])
         assert not any(isinf(d_check)), (d_check, feats_input.npvalue(), prev_output_vec.npvalue())
         # if reached the end word symbol
         if output_char == END_WORD:
@@ -714,7 +723,7 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, decoder_rnn, padded_
         if aligned_word[index] != ALIGN_SYMBOL:
             decoder_input = pc.concatenate([prev_output_vec,
                                             blstm_outputs[i],
-                                            feats_input])
+                                            ])
 
             # perform rnn step
             s = s.add_input(decoder_input)
@@ -745,7 +754,7 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, decoder_rnn, padded_
             # feedback, i, j, blstm[i], feats
             decoder_input = pc.concatenate([prev_output_vec,
                                             blstm_outputs[i],
-                                            feats_input])
+                                            ])
 
             s = s.add_input(decoder_input)
             decoder_rnn_output = s.output()
@@ -796,7 +805,7 @@ def encode_feats(feat_index, feat_lookup, feats, feature_types):
 
 
 # noinspection PyPep8Naming
-def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, alphabet_index,
+def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn_init, lemma, feats, alphabet_index,
                             inverse_alphabet_index, feat_index, feature_types):
     pc.renew_cg()
 
@@ -957,8 +966,8 @@ def sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
     from scipy.misc import logsumexp
     from numpy.random import shuffle
     free_fst = read_fst(lemma, inv_sigma, fst_dir, syms)
-    num_free_samples=30
-    free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=3e-3)
+    num_free_samples=64
+    free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=3e-1)
     order = np.arange(num_free_samples)
     shuffle(order)
     crunched_dict = {}
@@ -970,7 +979,8 @@ def sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
         pc.renew_cg()
         expr_R = pc.parameter(R)
         expr_bias = pc.parameter(bias)
-        loss = one_word_loss(model, char_lookup, feat_lookup, expr_R, expr_bias, decoder_rnn, padded_lemma, feats, word,
+        decoder_init = decoder_rnn.initial_state()
+        loss = one_word_loss(model, char_lookup, feat_lookup, expr_R, expr_bias, decoder_init, padded_lemma, feats, word,
                              alphabet_index, alignment, feat_index, feature_types, encoder_frnn=encoder_frnn,
                              encoder_rrnn=encoder_rrnn)
         l = - loss.value()
@@ -986,6 +996,7 @@ def sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
         if largest is None or s > largest_sum:
             largest = w
             largest_sum = s
+    print 'lemma: {} largest: {}'.format(lemma, largest)
     return largest
 
 
