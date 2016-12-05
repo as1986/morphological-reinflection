@@ -285,7 +285,25 @@ def read_fst(lemma, inv_sigma, dir, syms):
 
 def get_clamped_machine(lemma_fst, answer, syms):
     answer_fst = fst.linear_chain(answer, syms=syms, semiring='log')
-    return lemma_fst.compose(answer_fst)
+    return lemma_fst.compose(answer_fst).push_weights()
+
+
+def shortest_path(machine, sigma, num=1):
+    paths = []
+    m = machine.shortest_path(num)
+    for p in m.paths():
+        path_prob = 0
+        iseq = []
+        oseq = []
+        for arc in p:
+            iseq.append(arc.ilabel)
+            oseq.append(arc.olabel)
+            path_prob -= arc.weight
+        iseq = [sigma[x] if x != 0 else '~' for x in iseq]
+        oseq = [sigma[x] if x != 0 else '~' for x in oseq]
+        word = [x for x in oseq if x != '~']
+        paths.append({'weight': path_prob, 'alignment': (iseq, oseq), 'word': word})
+    return paths
 
 
 def sample(machine, sigma, num=64, inv_tau=1.):
@@ -400,64 +418,60 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             lemma, feats, word = example
             free_fst = read_fst(lemma, inv_sigma, fst_dir, syms)
             clamped_fst = get_clamped_machine(free_fst, word, syms)
-            if e < init_epochs:
-                # FIXME
-                assert False
-            clamped_log_likelihoods = []
-            clamped_weights = []
-            free_log_likelihoods = []
-            free_weights = []
             pc.renew_cg()
             expr_R = pc.parameter(R)
             expr_bias = pc.parameter(bias)
-            num_clamped_samples = 64
-            num_free_samples = 128
-            clamped_samples = sample(clamped_fst, sigma, num_clamped_samples, inv_tau=3e-1)
-            free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=3e-1)
             padded_lemma = BEGIN_WORD + lemma + END_WORD
             lemma_char_vecs = encode_lemma(alphabet_index, char_lookup, padded_lemma)
             blstm_outputs = bilstm_transduce(encoder_frnn, encoder_rrnn, lemma_char_vecs)
             decoder_init = decoder_rnn.initial_state()
-            for clamped_sample in clamped_samples:
-                alignment = clamped_sample['alignment']
-                loss = - one_word_loss(model, char_lookup, feat_lookup,
-                                       expr_R, expr_bias, decoder_init, padded_lemma,
-                                       feats, word, alphabet_index,
-                                       alignment, feat_index,
-                                       feature_types, blstm_outputs=blstm_outputs)
-                clamped_log_likelihoods.append(loss)
-                print 'clamped: {}'.format(loss.value())
-                clamped_weights.append(loss - clamped_sample['weight'])
-                # print (loss - clamped_sample['weight']).value()
-
-            for free_sample in free_samples:
-                alignment = free_sample['alignment']
-                loss = - one_word_loss(model, char_lookup, feat_lookup,
-                                       expr_R, expr_bias, decoder_init, padded_lemma,
-                                       feats, word, alphabet_index,
-                                       alignment, feat_index,
-                                       feature_types, blstm_outputs=blstm_outputs)
-                free_log_likelihoods.append(loss)
-                free_weights.append(loss - free_sample['weight'])
             if e < init_epochs:
                 # FIXME
-                assert False
-                nll = - pc.logsumexp(clamped_log_likelihoods)
-                coeff = float(e) / init_epochs
-                hope = clamped_log_likelihoods[:goods]
-                loss = - (pc.logsumexp(hope) - nll * coeff)
+                # get most probably clamped sequence
+                clamped_sample = shortest_path(clamped_fst, sigma, 1)[0]
+                alignment = clamped_sample['alignment']
+                loss = one_word_loss(model, char_lookup, feat_lookup,
+                                     expr_R, expr_bias, decoder_init, padded_lemma,
+                                     feats, word, alphabet_index,
+                                     alignment, feat_index,
+                                     feature_types, blstm_outputs=blstm_outputs)
             else:
+                clamped_log_likelihoods = []
+                clamped_weights = []
+                free_log_likelihoods = []
+                free_weights = []
+                num_clamped_samples = 64
+                num_free_samples = 128
+                clamped_samples = sample(clamped_fst, sigma, num_clamped_samples, inv_tau=3e-1)
+                free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=3e-1)
+
+                for clamped_sample in clamped_samples:
+                    alignment = clamped_sample['alignment']
+                    loss = - one_word_loss(model, char_lookup, feat_lookup,
+                                           expr_R, expr_bias, decoder_init, padded_lemma,
+                                           feats, word, alphabet_index,
+                                           alignment, feat_index,
+                                           feature_types, blstm_outputs=blstm_outputs)
+                    clamped_log_likelihoods.append(loss)
+                    print 'clamped: {}'.format(loss.value())
+                    clamped_weights.append(loss - clamped_sample['weight'])
+                    # print (loss - clamped_sample['weight']).value()
+
+                for free_sample in free_samples:
+                    alignment = free_sample['alignment']
+                    loss = - one_word_loss(model, char_lookup, feat_lookup,
+                                           expr_R, expr_bias, decoder_init, padded_lemma,
+                                           feats, word, alphabet_index,
+                                           alignment, feat_index,
+                                           feature_types, blstm_outputs=blstm_outputs)
+                    free_log_likelihoods.append(loss)
+                    free_weights.append(loss - free_sample['weight'])
+
                 clamped_weighted_ll = []
                 clamped_weight_sum = pc.logsumexp(clamped_weights)
-                # print clamped_weight_sum.value()
                 for ll, w in zip(clamped_log_likelihoods, clamped_weights):
                     clamped_weighted_ll.append(ll * pc.exp(w - clamped_weight_sum))
-                # print 'clamped weights: {}'.format([x.value() for x in clamped_weights])
-                # print 'sum: {}'.format(clamped_weight_sum.value())
-                # c_max = pc.emax(clamped_weights)
-                # lsumexp = pc.esum([pc.exp(x-c_max) for x in clamped_weights])
-                # print 'sum 2: {}'.format(lsumexp.value())
-                # print 'normalized {}'.format((w - clamped_weight_sum).value())
+
                 free_weighted_ll = []
                 free_weight_sum = pc.logsumexp(free_weights)
                 for ll, w in zip(free_log_likelihoods, free_weights):
@@ -470,11 +484,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                 print 'losses: {}'.format([x.value() for x in clamped_weighted_ll])
                 print 'losses: {}'.format([x.value() for x in free_weighted_ll])
                 assert False
-            # losses_concat = pc.concatenate(losses)
-            # losses_concat = pc.exp(losses_concat - maximum)
-            # z = pc.log(pc.sum_cols(losses_concat))
-            # hope = losses_concat[0:goods]
-            # loss = - (pc.log(pc.sum_cols(hope)) - z)
+
             total_loss += loss_value
             loss.backward()
             trainer.update()
@@ -638,9 +648,9 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, decoder_init, padded
 
     # convert features to matching embeddings, if UNK handle properly
     # FIXME
-    # feat_vecs = encode_feats(feat_index, feat_lookup, feats, feature_types)
+    feat_vecs = encode_feats(feat_index, feat_lookup, feats, feature_types)
 
-    # feats_input = pc.concatenate(feat_vecs)
+    feats_input = pc.concatenate(feat_vecs)
 
     # convert characters to matching embeddings
     if blstm_outputs is None:
