@@ -4,7 +4,8 @@ files and evaluation script.
 Usage:
   hard_attention.py [--dynet-mem MEM][--input=INPUT] [--hidden=HIDDEN]
   [--feat-input=FEAT] [--epochs=EPOCHS] [--layers=LAYERS] [--optimization=OPTIMIZATION] [--reg=REGULARIZATION]
-  [--learning=LEARNING] [--plot] [--eval] [--init-epochs=INIT_EPOCHS] [--ensemble=ENSEMBLE] TRAIN_PATH DEV_PATH TEST_PATH RESULTS_PATH SIGMORPHON_PATH SYMS_PATH
+  [--learning=LEARNING] [--plot] [--eval] [--do-not-normalize] [--init-epochs=INIT_EPOCHS]
+  [--ensemble=ENSEMBLE] TRAIN_PATH DEV_PATH TEST_PATH RESULTS_PATH SIGMORPHON_PATH SYMS_PATH
 
 Arguments:
   TRAIN_PATH    destination path
@@ -29,6 +30,7 @@ Options:
   --eval                        run evaluation without training
   --init-epochs=INIT_EPOCHS     number of initialization epochs (i.e. epochs in which the original objective is being minimized)
   --ensemble=ENSEMBLE           ensemble model paths, separated by comma
+  --do-not-normalize                   normalize
 """
 
 import traceback
@@ -101,11 +103,11 @@ def load_preprocessed(path):
 
 def main(train_path, dev_path, test_path, results_file_path, sigmorphon_root_dir, input_dim, hidden_dim, feat_input_dim,
          epochs, layers, optimization, regularization, learning_rate, plot, eval_only, ensemble, init_epochs,
-         syms_file):
+         syms_file, normalize):
     hyper_params = {'INPUT_DIM': input_dim, 'HIDDEN_DIM': hidden_dim, 'FEAT_INPUT_DIM': feat_input_dim,
                     'EPOCHS': epochs, 'LAYERS': layers, 'MAX_PREDICTION_LEN': MAX_PREDICTION_LEN,
                     'OPTIMIZATION': optimization, 'PATIENCE': MAX_PATIENCE, 'REGULARIZATION': regularization,
-                    'LEARNING_RATE': learning_rate, 'INIT_EPOCHS': init_epochs}
+                    'LEARNING_RATE': learning_rate, 'INIT_EPOCHS': init_epochs, 'NORMALIZE': normalize}
 
     print 'train path = ' + str(train_path)
     print 'dev path =' + str(dev_path)
@@ -157,7 +159,7 @@ def main(train_path, dev_path, test_path, results_file_path, sigmorphon_root_dir
                                                         feat_index, feature_types, feat_input_dim, feature_alphabet,
                                                         plot, train_answers, dev_answers,
                                                         init_epochs,
-                                                        syms_file=syms_file
+                                                        syms_file=syms_file, normalize
                                                         )
 
         # print when did each model stop
@@ -193,7 +195,7 @@ def train_model_wrapper(input_dim, hidden_dim, layers, train_lemmas, train_feat_
                         alphabet, alphabet_index, inverse_alphabet_index, epochs,
                         optimization, results_file_path, feat_index,
                         feature_types, feat_input_dim, feature_alphabet, plot, train_answers,
-                        dev_answers, init_epochs, syms_file):
+                        dev_answers, init_epochs, syms_file, normalize):
     # build model
     initial_model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn = \
         build_model(alphabet, input_dim, hidden_dim, layers, feature_types, feat_input_dim,
@@ -208,7 +210,8 @@ def train_model_wrapper(input_dim, hidden_dim, layers, train_lemmas, train_feat_
                                             inverse_alphabet_index,
                                             epochs, optimization, results_file_path,
                                             feat_index, feature_types,
-                                            plot, train_answers, dev_answers, init_epochs, syms_file)
+                                            plot, train_answers, dev_answers, init_epochs, syms_file,
+                                            normalize=normalize)
 
     # evaluate last model on dev
     predicted_sequences, train_upper_bound = sample_decode_sequences(trained_model, char_lookup, feat_lookup, R, bias, 
@@ -368,7 +371,8 @@ def read_syms(syms_file):
 def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, train_lemmas,
                 train_feat_dicts, dev_lemmas, dev_feat_dicts, alphabet_index,
                 inverse_alphabet_index, epochs, optimization, results_file_path,
-                feat_index, feature_types, plot, train_answers, dev_answers, init_epochs, syms_file):
+                feat_index, feature_types, plot, train_answers, dev_answers, init_epochs, syms_file,
+                normalize=True):
     print 'training...'
     sigma, inv_sigma, syms = read_syms(syms_file)
     fst_dir = '/export/a10/kitsing/ryanouts/ryanout-2PKE-z-0/train/'
@@ -430,15 +434,16 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             blstm_outputs = bilstm_transduce(encoder_frnn, encoder_rrnn, lemma_char_vecs)
             decoder_init = decoder_rnn.initial_state()
             if e < init_epochs:
-                # FIXME
                 # get most probably clamped sequence
                 clamped_sample = shortest_path(clamped_fst, sigma, 1)[0]
                 alignment = clamped_sample['alignment']
+                # FIXME may need to always normalize for the first epochs
                 loss = one_word_loss(model, char_lookup, feat_lookup,
                                      expr_R, expr_bias, decoder_init, padded_lemma,
                                      feats, word, alphabet_index,
                                      alignment, feat_index,
-                                     feature_types, blstm_outputs=blstm_outputs)
+                                     feature_types, blstm_outputs=blstm_outputs,
+                                     normalize=normalize)
             else:
                 clamped_log_likelihoods = []
                 clamped_weights = []
@@ -455,7 +460,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                                            expr_R, expr_bias, decoder_init, padded_lemma,
                                            feats, word, alphabet_index,
                                            alignment, feat_index,
-                                           feature_types, blstm_outputs=blstm_outputs)
+                                           feature_types, blstm_outputs=blstm_outputs, normalize=normalize)
                     clamped_log_likelihoods.append(loss)
                     # print 'clamped: {}'.format(loss.value())
                     clamped_weights.append(loss - clamped_sample['weight'])
@@ -467,7 +472,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                                            expr_R, expr_bias, decoder_init, padded_lemma,
                                            feats, word, alphabet_index,
                                            alignment, feat_index,
-                                           feature_types, blstm_outputs=blstm_outputs)
+                                           feature_types, blstm_outputs=blstm_outputs, normalize=normalize)
                     free_log_likelihoods.append(loss)
                     free_weights.append(loss - free_sample['weight'])
 
@@ -510,7 +515,8 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                                                                            train_feat_dicts[:sanity_set_size], 
                                                                            feat_index, feature_types,
                                                                            sigma, inv_sigma, fst_dir, syms, 
-                                                                           answers=train_answers[:sanity_set_size])
+                                                                           answers=train_answers[:sanity_set_size],
+                                                                           normalize=normalize)
 
             _, train_accuracy, train_upper_bound = evaluate_model(train_predictions, train_lemmas[:sanity_set_size],
                                                                   train_feat_dicts[:sanity_set_size],
@@ -533,7 +539,8 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                                                                            inverse_alphabet_index, dev_lemmas, dev_feat_dicts,
                                                                            feat_index, feature_types, sigma, inv_sigma, 
                                                                            dev_fst_dir, syms,
-                                                                           answers=dev_answers)
+                                                                           answers=dev_answers,
+                                                                           normalize=normalize)
                 print 'evaluating on dev...'
                 # get dev accuracy
                 _, dev_accuracy, dev_upper_bound = evaluate_model(dev_predictions, dev_lemmas, dev_feat_dicts, dev_answers,
@@ -654,7 +661,8 @@ def save_pycnn_model(model, results_file_path):
 # noinspection PyPep8Naming,PyUnusedLocal,PyUnusedLocal,PyUnusedLocal,PyUnusedLocal,PyUnusedLocal,PyUnusedLocal
 def one_word_loss(model, char_lookup, feat_lookup, R, bias, decoder_init, padded_lemma, feats, word,
                   alphabet_index, aligned_pair,
-                  feat_index, feature_types, encoder_frnn=None, encoder_rrnn=None, blstm_outputs=None):
+                  feat_index, feature_types, encoder_frnn=None, encoder_rrnn=None, blstm_outputs=None,
+                  normalize=True):
     from numpy import isnan, isinf
     # pc.renew_cg()
 
@@ -721,7 +729,10 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, decoder_init, padded
         if output_char == END_WORD:
             s = s.add_input(decoder_input)
             decoder_rnn_output = s.output()
-            probs = pc.log_softmax(R * decoder_rnn_output + bias)
+            if normalize:
+                probs = pc.log_softmax(R * decoder_rnn_output + bias)
+            else:
+                probs = R * decoder_rnn_output + bias
 
             p_check = probs.npvalue()
             assert not any(isnan(p_check)), (p_check, decoder_rnn_output.npvalue())
@@ -737,7 +748,10 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, decoder_init, padded
             # feedback, i, j, blstm[i], feats
             s = s.add_input(decoder_input)
             decoder_rnn_output = s.output()
-            probs = pc.log_softmax(R * decoder_rnn_output + bias)
+            if normalize:
+                probs = pc.log_softmax(R * decoder_rnn_output + bias)
+            else:
+                probs = R * decoder_rnn_output + bias
 
             p_check = probs.npvalue()
             assert not any(isnan(p_check)), (p_check, decoder_rnn_output.npvalue())
@@ -760,7 +774,10 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, decoder_init, padded
             # perform rnn step
             s = s.add_input(decoder_input)
             decoder_rnn_output = s.output()
-            probs = pc.log_softmax(R * decoder_rnn_output + bias)
+            if normalize:
+                probs = pc.log_softmax(R * decoder_rnn_output + bias)
+            else:
+                probs = R * decoder_rnn_output + bias
 
             p_check = probs.npvalue()
             assert not any(isnan(p_check)), (p_check, decoder_rnn_output.npvalue())
@@ -790,7 +807,10 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, decoder_init, padded
 
             s = s.add_input(decoder_input)
             decoder_rnn_output = s.output()
-            probs = pc.log_softmax(R * decoder_rnn_output + bias)
+            if normalize:
+                probs = pc.log_softmax(R * decoder_rnn_output + bias)
+            else:
+                probs = R * decoder_rnn_output + bias
 
             p_check = probs.npvalue()
             assert not any(isnan(p_check)), (p_check, decoder_rnn_output.npvalue())
@@ -963,7 +983,8 @@ def predict_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, en
 
 
 def rerank(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn,
-                  alphabet_index, feat_index, feature_types, lemma, feats, words, alignments):
+                  alphabet_index, feat_index, feature_types, lemma, feats, words, alignments,
+           normalize=True):
     from numpy import argmin, arange, isnan, isinf
     from numpy.random import shuffle
     losses = []
@@ -981,7 +1002,8 @@ def rerank(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
         # FIXME
         loss = one_word_loss(model, char_lookup, feat_lookup, expr_R, expr_bias, encoder_frnn,
                                                      encoder_rrnn, decoder_rnn, padded_lemma, feats, word,
-                                                     alphabet_index, alignment, feat_index, feature_types)
+                                                     alphabet_index, alignment, feat_index, feature_types,
+                             normalize=normalize)
         losses.append(loss.value())
     # print 'losses: {}'.format(losses)
     assert not any(isnan(losses))
@@ -995,7 +1017,7 @@ def word_from_alignment(alignment):
 
 def sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn,
                   alphabet_index, feat_index, feature_types, lemma, feats, sigma, inv_sigma, fst_dir, syms,
-                  answer=None):
+                  answer=None, normalize=True):
     from scipy.misc import logsumexp
     from numpy.random import shuffle
     free_fst = read_fst(lemma, inv_sigma, fst_dir, syms)
@@ -1015,7 +1037,7 @@ def sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
         decoder_init = decoder_rnn.initial_state()
         loss = one_word_loss(model, char_lookup, feat_lookup, expr_R, expr_bias, decoder_init, padded_lemma, feats, word,
                              alphabet_index, alignment, feat_index, feature_types, encoder_frnn=encoder_frnn,
-                             encoder_rrnn=encoder_rrnn)
+                             encoder_rrnn=encoder_rrnn, normalize=normalize)
         l = - loss.value()
         corrected = l - weight
         if word not in crunched_dict:
@@ -1037,7 +1059,7 @@ def sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
 
 def sample_decode_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn,
                             alphabet_index, inverse_alphabet_index, lemmas, feats, feat_index, feature_types, sigma,
-                            inv_sigma, fst_dir, syms, answers=None):
+                            inv_sigma, fst_dir, syms, answers=None, normalize=True):
     predictions = {}
     if answers is None:
         answers = [None] * len(lemmas)
@@ -1048,7 +1070,7 @@ def sample_decode_sequences(model, char_lookup, feat_lookup, R, bias, encoder_fr
         predicted_sequence = sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
                                            decoder_rnn,
                                            alphabet_index, feat_index, feature_types, lemma, feats,
-                                           sigma, inv_sigma, fst_dir, syms, answer)
+                                           sigma, inv_sigma, fst_dir, syms, answer, normalize=normalize)
         if answer is not None:
             if predicted_sequence[1]:
                 count += 1
@@ -1317,6 +1339,10 @@ if __name__ == '__main__':
         eval_param = True
     else:
         eval_param = False
+    if arguments['--do-not-normalize']:
+        normalize_param = False
+    else:
+        normalize_param = True
     if arguments['--ensemble']:
         ensemble_param = arguments['--ensemble']
     else:
@@ -1332,7 +1358,7 @@ if __name__ == '__main__':
     main(train_path_param, dev_path_param, test_path_param, results_file_path_param, sigmorphon_root_dir_param,
          input_dim_param,
          hidden_dim_param, feat_input_dim_param, epochs_param, layers_param, optimization_param, regularization_param,
-         learning_rate_param, plot_param, eval_param, ensemble_param, init_epochs_param, syms_file)
+         learning_rate_param, plot_param, eval_param, ensemble_param, init_epochs_param, syms_file, normalize_param)
 
 
 def encode_feats_and_chars(alphabet_index, char_lookup, encoder_frnn, encoder_rrnn, feat_index, feat_lookup, feats,
