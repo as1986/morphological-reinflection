@@ -290,15 +290,15 @@ def get_clamped_machine(lemma_fst, answer, syms):
 
 def shortest_path(machine, sigma, num=1):
     paths = []
-    m = machine.shortest_path(num)
+    m = fst.StdVectorFst(machine).shortest_path(num)
     for p in m.paths():
-        path_prob = 0
+        path_prob = 0.
         iseq = []
         oseq = []
         for arc in p:
             iseq.append(arc.ilabel)
             oseq.append(arc.olabel)
-            path_prob -= arc.weight
+            path_prob -= float(arc.weight)
         iseq = [sigma[x] if x != 0 else '~' for x in iseq]
         oseq = [sigma[x] if x != 0 else '~' for x in oseq]
         word = [x for x in oseq if x != '~']
@@ -442,8 +442,8 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                 free_weights = []
                 num_clamped_samples = 64
                 num_free_samples = 128
-                clamped_samples = sample(clamped_fst, sigma, num_clamped_samples, inv_tau=3e-1)
-                free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=3e-1)
+                clamped_samples = sample(clamped_fst, sigma, num_clamped_samples, inv_tau=1e-1)
+                free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=1e-1)
 
                 for clamped_sample in clamped_samples:
                     alignment = clamped_sample['alignment']
@@ -453,7 +453,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                                            alignment, feat_index,
                                            feature_types, blstm_outputs=blstm_outputs)
                     clamped_log_likelihoods.append(loss)
-                    print 'clamped: {}'.format(loss.value())
+                    # print 'clamped: {}'.format(loss.value())
                     clamped_weights.append(loss - clamped_sample['weight'])
                     # print (loss - clamped_sample['weight']).value()
 
