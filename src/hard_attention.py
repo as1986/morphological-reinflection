@@ -211,11 +211,14 @@ def train_model_wrapper(input_dim, hidden_dim, layers, train_lemmas, train_feat_
                                             plot, train_answers, dev_answers, init_epochs, syms_file)
 
     # evaluate last model on dev
-    predicted_sequences = sample_decode_sequences(trained_model, char_lookup, feat_lookup, R, bias, encoder_frnn,
-                                                  encoder_rrnn, decoder_rnn, alphabet_index, inverse_alphabet_index,
-                                                  dev_lemmas, dev_feat_dicts, feat_index, feature_types)
+    predicted_sequences, train_upper_bound = sample_decode_sequences(trained_model, char_lookup, feat_lookup, R, bias, 
+                                                                     encoder_frnn,                                      
+                                                                     encoder_rrnn, decoder_rnn, alphabet_index, 
+                                                                     inverse_alphabet_index,
+                                                                     dev_lemmas, dev_feat_dicts, feat_index, 
+                                                                     feature_types, answers=train_answers)
     if len(predicted_sequences) > 0:
-        evaluate_model(predicted_sequences, dev_lemmas, dev_feat_dicts, dev_answers, feature_types, print_results=False)
+        evaluate_model(predicted_sequences, dev_lemmas, dev_feat_dicts, dev_answers, feature_types, print_results=False, upper_bound=train_upper_bound)
     else:
         print 'no examples in dev set to evaluate'
 
@@ -266,13 +269,14 @@ def load_best_model(alphabet, results_file_path, input_dim, hidden_dim, layers, 
     return model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn
 
 
-def log_to_file(file_name, e, avg_loss, train_accuracy, dev_accuracy):
+def log_to_file(file_name, e, avg_loss, train_accuracy, dev_accuracy, train_upper_bound, dev_upper_bound):
     # if first write, add headers
     if e == 0:
-        log_to_file(file_name, 'epoch', 'avg_loss', 'train_accuracy', 'dev_accuracy')
+        log_to_file(file_name, 'epoch', 'avg_loss', 'train_accuracy', 'dev_accuracy', 'train_upper_bound', 'dev_upper_bound')
 
     with open(file_name, "a") as logfile:
-        logfile.write("{}\t{}\t{}\t{}\n".format(e, avg_loss, train_accuracy, dev_accuracy))
+        logfile.write("{}\t{}\t{}\t{}\t{}\t{}\n".format(e, avg_loss, train_accuracy, dev_accuracy, train_upper_bound,
+                                                        dev_upper_bound))
 
 
 def read_fst(lemma, inv_sigma, dir, syms):
@@ -498,16 +502,21 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
 
             # get train accuracy
             print 'evaluating on train...'
-            train_predictions = sample_decode_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn,
-                                                        encoder_rrnn, decoder_rnn, alphabet_index,
-                                                        inverse_alphabet_index, train_lemmas[:sanity_set_size],
-                                                        train_feat_dicts[:sanity_set_size], feat_index, feature_types,
-                                                        sigma, inv_sigma, fst_dir, syms)
+            train_predictions, train_upper_bound = sample_decode_sequences(model, char_lookup, 
+                                                                           feat_lookup, R, bias, encoder_frnn,
+                                                                           encoder_rrnn, decoder_rnn, alphabet_index,
+                                                                           inverse_alphabet_index, 
+                                                                           train_lemmas[:sanity_set_size],
+                                                                           train_feat_dicts[:sanity_set_size], 
+                                                                           feat_index, feature_types,
+                                                                           sigma, inv_sigma, fst_dir, syms, 
+                                                                           answers=train_answers[:sanity_set_size])
 
-            train_accuracy = evaluate_model(train_predictions, train_lemmas[:sanity_set_size],
-                                            train_feat_dicts[:sanity_set_size],
-                                            train_answers[:sanity_set_size],
-                                            feature_types, print_results=False)[1]
+            _, train_accuracy, train_upper_bound = evaluate_model(train_predictions, train_lemmas[:sanity_set_size],
+                                                                  train_feat_dicts[:sanity_set_size],
+                                                                  train_answers[:sanity_set_size],
+                                                                  feature_types, print_results=False, 
+                                                                  upper_bound=train_upper_bound)
 
             if train_accuracy > best_train_accuracy:
                 best_train_accuracy = train_accuracy
@@ -518,15 +527,18 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             if len(dev_lemmas) > 0:
 
                 # get dev accuracy
-                dev_predictions = sample_decode_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn,
-                                                          encoder_rrnn, decoder_rnn, alphabet_index,
-                                                          inverse_alphabet_index, dev_lemmas, dev_feat_dicts,
-                                                          feat_index, feature_types, sigma, inv_sigma, dev_fst_dir, syms)
+                dev_predictions, dev_upper_bound = sample_decode_sequences(model, char_lookup, 
+                                                                           feat_lookup, R, bias, encoder_frnn,
+                                                                           encoder_rrnn, decoder_rnn, alphabet_index,
+                                                                           inverse_alphabet_index, dev_lemmas, dev_feat_dicts,
+                                                                           feat_index, feature_types, sigma, inv_sigma, 
+                                                                           dev_fst_dir, syms,
+                                                                           answers=dev_answers)
                 print 'evaluating on dev...'
                 # get dev accuracy
-                dev_accuracy = evaluate_model(dev_predictions, dev_lemmas, dev_feat_dicts, dev_answers,
-                                              feature_types,
-                                              print_results=True)[1]
+                _, dev_accuracy, dev_upper_bound = evaluate_model(dev_predictions, dev_lemmas, dev_feat_dicts, dev_answers,
+                                                                  feature_types,
+                                                                  print_results=True, upper_bound=dev_upper_bound)
 
                 if dev_accuracy > best_dev_accuracy:
                     best_dev_accuracy = dev_accuracy
@@ -557,12 +569,22 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                 if avg_dev_loss < best_avg_dev_loss:
                     best_avg_dev_loss = avg_dev_loss
                 '''
-                print 'epoch: {0} train loss: {1:.4f} dev loss: {2:.4f} dev accuracy: {3:.4f} train accuracy = {4:.4f} \
- best dev accuracy {5:.4f} best train accuracy: {6:.4f} patience = {7}'.format(e, avg_loss, avg_dev_loss, dev_accuracy,
-                                                                               train_accuracy, best_dev_accuracy,
-                                                                               best_train_accuracy, patience)
+                print ("epoch: {0} train loss: {1:.4f} dev loss: {2:.4f} "
+                       "dev accuracy: {3:.4f} train accuracy = {4:.4f} "
+                       "dev upper bound: {8:.4f} dev upper bound = {9:.4f} "
+                       "best dev accuracy {5:.4f} best train accuracy: "
+                       "{6:.4f} patience = {7}").format(e, avg_loss, 
+                                                        avg_dev_loss, 
+                                                        dev_accuracy,
+                                                        train_accuracy, 
+                                                        best_dev_accuracy,
+                                                        best_train_accuracy, 
+                                                        patience,
+                                                        dev_upper_bound,
+                                                        train_upper_bound)
 
-                log_to_file(results_file_path + '_log.txt', e, avg_loss, train_accuracy, dev_accuracy)
+                log_to_file(results_file_path + '_log.txt', e, avg_loss, train_accuracy, dev_accuracy, train_upper_bound,
+                            dev_upper_bound)
 
                 if patience == MAX_PATIENCE:
                     print 'out of patience after {0} epochs'.format(str(e))
@@ -972,7 +994,8 @@ def word_from_alignment(alignment):
 
 
 def sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn,
-                  alphabet_index, feat_index, feature_types, lemma, feats, sigma, inv_sigma, fst_dir, syms):
+                  alphabet_index, feat_index, feature_types, lemma, feats, sigma, inv_sigma, fst_dir, syms,
+                  answer=None):
     from scipy.misc import logsumexp
     from numpy.random import shuffle
     free_fst = read_fst(lemma, inv_sigma, fst_dir, syms)
@@ -1007,25 +1030,37 @@ def sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
             largest = w
             largest_sum = s
     print 'lemma: {} largest: {}'.format(lemma, largest)
+    if answer is not None:
+        return largest, answer in crunched_dict
     return largest
 
 
 def sample_decode_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn,
                             alphabet_index, inverse_alphabet_index, lemmas, feats, feat_index, feature_types, sigma,
-                            inv_sigma, fst_dir, syms):
+                            inv_sigma, fst_dir, syms, answers=None):
     predictions = {}
-    for i, (lemma, feat_dict) in enumerate(zip(lemmas, feats)):
+    if answers is None:
+        answers = [None] * len(lemmas)
+    else:
+        count = 0
+    for i, (lemma, feat_dict, answer) in enumerate(zip(lemmas, feats, answers)):
 
         predicted_sequence = sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
                                            decoder_rnn,
                                            alphabet_index, feat_index, feature_types, lemma, feats,
-                                           sigma, inv_sigma, fst_dir, syms)
+                                           sigma, inv_sigma, fst_dir, syms, answer)
+        if answer is not None:
+            if predicted_sequence[1]:
+                count += 1
+            predicted_sequence = predicted_sequence[0]
 
         # index each output by its matching inputs - lemma + features
         joint_index = lemma + ':' + common.get_morph_string(feat_dict, feature_types)
         predictions[joint_index] = predicted_sequence
 
-    return predictions
+    if answers is None:
+        return predictions
+    return predictions, count
 
 
 def represents_int(s):
@@ -1036,7 +1071,7 @@ def represents_int(s):
         return False
 
 
-def evaluate_model(predicted_sequences, lemmas, feature_dicts, words, feature_types, print_results=False):
+def evaluate_model(predicted_sequences, lemmas, feature_dicts, words, feature_types, print_results=False, upper_bound=None):
     if print_results:
         print 'evaluating model...'
 
@@ -1066,7 +1101,11 @@ def evaluate_model(predicted_sequences, lemmas, feature_dicts, words, feature_ty
     if print_results:
         print 'finished evaluating model. accuracy: ' + str(c) + '/' + str(len(predicted_sequences)) + '=' + \
               str(accuracy) + '\n\n'
+        if upper_bound is not None:
+            print 'upper bound: {}'.format(float(upper_bound)/len(predicted_sequences))
 
+    if upper_bound is not None:
+        return len(predicted_sequences), accuracy, float(upper_bound)/len(predicted_sequences)
     return len(predicted_sequences), accuracy
 
 
