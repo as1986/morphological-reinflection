@@ -4,7 +4,7 @@ files and evaluation script.
 Usage:
   hard_attention.py [--dynet-mem MEM][--input=INPUT] [--hidden=HIDDEN]
   [--feat-input=FEAT] [--epochs=EPOCHS] [--layers=LAYERS] [--optimization=OPTIMIZATION] [--reg=REGULARIZATION]
-  [--learning=LEARNING] [--plot] [--eval] [--do-not-normalize] [--init-epochs=INIT_EPOCHS]
+  [--learning=LEARNING] [--plot] [--eval] [--do-not-normalize] [--init-epochs=INIT_EPOCHS] [--inv-tau=INV_TAU]
   [--ensemble=ENSEMBLE] TRAIN_PATH DEV_PATH TEST_PATH RESULTS_PATH SIGMORPHON_PATH SYMS_PATH
 
 Arguments:
@@ -29,6 +29,7 @@ Options:
   --plot                        draw a learning curve plot while training each model
   --eval                        run evaluation without training
   --init-epochs=INIT_EPOCHS     number of initialization epochs (i.e. epochs in which the original objective is being minimized)
+  --inv-tau=INV_TAU             inverse tau
   --ensemble=ENSEMBLE           ensemble model paths, separated by comma
   --do-not-normalize                   normalize
 """
@@ -103,11 +104,12 @@ def load_preprocessed(path):
 
 def main(train_path, dev_path, test_path, results_file_path, sigmorphon_root_dir, input_dim, hidden_dim, feat_input_dim,
          epochs, layers, optimization, regularization, learning_rate, plot, eval_only, ensemble, init_epochs,
-         syms_file, normalize):
+         syms_file, normalize, inv_tau):
     hyper_params = {'INPUT_DIM': input_dim, 'HIDDEN_DIM': hidden_dim, 'FEAT_INPUT_DIM': feat_input_dim,
                     'EPOCHS': epochs, 'LAYERS': layers, 'MAX_PREDICTION_LEN': MAX_PREDICTION_LEN,
                     'OPTIMIZATION': optimization, 'PATIENCE': MAX_PATIENCE, 'REGULARIZATION': regularization,
-                    'LEARNING_RATE': learning_rate, 'INIT_EPOCHS': init_epochs, 'NORMALIZE': normalize}
+                    'LEARNING_RATE': learning_rate, 'INIT_EPOCHS': init_epochs, 'NORMALIZE': normalize,
+                    'INV_TAU': inv_tau}
 
     print 'train path = ' + str(train_path)
     print 'dev path =' + str(dev_path)
@@ -159,7 +161,8 @@ def main(train_path, dev_path, test_path, results_file_path, sigmorphon_root_dir
                                                         feat_index, feature_types, feat_input_dim, feature_alphabet,
                                                         plot, train_answers, dev_answers,
                                                         init_epochs,
-                                                        syms_file=syms_file, normalize=normalize
+                                                        syms_file=syms_file, normalize=normalize,
+                                                        inv_tau=inv_tau
                                                         )
 
         # print when did each model stop
@@ -195,7 +198,7 @@ def train_model_wrapper(input_dim, hidden_dim, layers, train_lemmas, train_feat_
                         alphabet, alphabet_index, inverse_alphabet_index, epochs,
                         optimization, results_file_path, feat_index,
                         feature_types, feat_input_dim, feature_alphabet, plot, train_answers,
-                        dev_answers, init_epochs, syms_file, normalize):
+                        dev_answers, init_epochs, syms_file, normalize, inv_tau=None):
     # build model
     initial_model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn = \
         build_model(alphabet, input_dim, hidden_dim, layers, feature_types, feat_input_dim,
@@ -211,7 +214,7 @@ def train_model_wrapper(input_dim, hidden_dim, layers, train_lemmas, train_feat_
                                             epochs, optimization, results_file_path,
                                             feat_index, feature_types,
                                             plot, train_answers, dev_answers, init_epochs, syms_file,
-                                            normalize=normalize)
+                                            normalize=normalize, inv_tau=inv_tau)
 
     # evaluate last model on dev
     predicted_sequences, train_upper_bound = sample_decode_sequences(trained_model, char_lookup, feat_lookup, R, bias, 
@@ -219,7 +222,8 @@ def train_model_wrapper(input_dim, hidden_dim, layers, train_lemmas, train_feat_
                                                                      encoder_rrnn, decoder_rnn, alphabet_index, 
                                                                      inverse_alphabet_index,
                                                                      dev_lemmas, dev_feat_dicts, feat_index, 
-                                                                     feature_types, answers=train_answers)
+                                                                     feature_types, answers=train_answers, 
+                                                                     inv_tau=inv_tau)
     if len(predicted_sequences) > 0:
         evaluate_model(predicted_sequences, dev_lemmas, dev_feat_dicts, dev_answers, feature_types, print_results=False, upper_bound=train_upper_bound)
     else:
@@ -353,9 +357,11 @@ def sample(machine, sigma, num=64, inv_tau=1.):
 
 
 def ess(l):
-    num = pc.esum(l) ** 2
-    denom = pc.esum([x ** 2 for x in l])
-    return num / denom
+    log_sum_exp = pc.logsumexp(l)
+    normalized = [pc.exp(x-log_sum_exp) for x in l]
+    num = pc.pow(pc.esum(normalized),pc.scalarInput(2.))
+    denom = pc.esum([pc.pow(x,pc.scalarInput(2.)) for x in normalized])
+    return pc.cdiv(num, denom)
 
 
 def read_syms(syms_file):
@@ -378,7 +384,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                 train_feat_dicts, dev_lemmas, dev_feat_dicts, alphabet_index,
                 inverse_alphabet_index, epochs, optimization, results_file_path,
                 feat_index, feature_types, plot, train_answers, dev_answers, init_epochs, syms_file,
-                normalize=True):
+                normalize=True, inv_tau=3e-2):
     print 'training...'
     sigma, inv_sigma, syms = read_syms(syms_file)
     fst_dir = '/export/a10/kitsing/ryanouts/ryanout-2PKE-z-0/train/'
@@ -455,10 +461,10 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                 clamped_weights = []
                 # free_log_likelihoods = []
                 free_weights = []
-                num_clamped_samples = 64
-                num_free_samples = 128
-                clamped_samples = sample(clamped_fst, sigma, num_clamped_samples, inv_tau=1e-1)
-                free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=1e-1)
+                num_clamped_samples = 512
+                num_free_samples = 512
+                clamped_samples = sample(clamped_fst, sigma, num_clamped_samples, inv_tau=inv_tau)
+                free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=inv_tau)
 
                 for clamped_sample in clamped_samples:
                     alignment = clamped_sample['alignment']
@@ -472,7 +478,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                     clamped_weights.append(loss - clamped_sample['weight'])
                     # print (loss - clamped_sample['weight']).value()
 
-                print 'clamped ess: {}'.format(ess(clamped_weights))
+                print 'clamped ess: {}'.format(ess(clamped_weights).value())
 
                 for free_sample in free_samples:
                     alignment = free_sample['alignment']
@@ -484,7 +490,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                     # free_log_likelihoods.append(loss)
                     free_weights.append(loss - free_sample['weight'])
 
-                print 'free ess: {}'.format(ess(free_weights))
+                print 'free ess: {}'.format(ess(free_weights).value())
 
                 loss = - (pc.logsumexp(clamped_weights) - np.log(num_clamped_samples)
                           - pc.logsumexp(free_weights) + np.log(num_free_samples))
@@ -518,7 +524,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                                                                            feat_index, feature_types,
                                                                            sigma, inv_sigma, fst_dir, syms, 
                                                                            answers=train_answers[:sanity_set_size],
-                                                                           normalize=normalize)
+                                                                           normalize=normalize, inv_tau=inv_tau)
 
             _, train_accuracy, train_upper_bound = evaluate_model(train_predictions, train_lemmas[:sanity_set_size],
                                                                   train_feat_dicts[:sanity_set_size],
@@ -542,7 +548,8 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                                                                            feat_index, feature_types, sigma, inv_sigma, 
                                                                            dev_fst_dir, syms,
                                                                            answers=dev_answers,
-                                                                           normalize=normalize)
+                                                                           normalize=normalize,
+                                                                           inv_tau=inv_tau)
                 print 'evaluating on dev...'
                 # get dev accuracy
                 _, dev_accuracy, dev_upper_bound = evaluate_model(dev_predictions, dev_lemmas, dev_feat_dicts, dev_answers,
@@ -1019,12 +1026,12 @@ def word_from_alignment(alignment):
 
 def sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn,
                   alphabet_index, feat_index, feature_types, lemma, feats, sigma, inv_sigma, fst_dir, syms,
-                  answer=None, normalize=True):
+                  answer=None, normalize=True, inv_tau=None):
     from scipy.misc import logsumexp
     from numpy.random import shuffle
     free_fst = read_fst(lemma, inv_sigma, fst_dir, syms)
-    num_free_samples=64
-    free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=3e-1)
+    num_free_samples=512
+    free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=inv_tau)
     order = np.arange(num_free_samples)
     shuffle(order)
     crunched_dict = {}
@@ -1061,7 +1068,7 @@ def sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
 
 def sample_decode_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn,
                             alphabet_index, inverse_alphabet_index, lemmas, feats, feat_index, feature_types, sigma,
-                            inv_sigma, fst_dir, syms, answers=None, normalize=True):
+                            inv_sigma, fst_dir, syms, answers=None, normalize=True, inv_tau=None):
     predictions = {}
     if answers is None:
         answers = [None] * len(lemmas)
@@ -1072,7 +1079,8 @@ def sample_decode_sequences(model, char_lookup, feat_lookup, R, bias, encoder_fr
         predicted_sequence = sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
                                            decoder_rnn,
                                            alphabet_index, feat_index, feature_types, lemma, feats,
-                                           sigma, inv_sigma, fst_dir, syms, answer, normalize=normalize)
+                                           sigma, inv_sigma, fst_dir, syms, answer, normalize=normalize,
+                                           inv_tau=inv_tau)
         if answer is not None:
             if predicted_sequence[1]:
                 count += 1
@@ -1354,13 +1362,18 @@ if __name__ == '__main__':
         init_epochs_param = int(arguments['--init-epochs'])
     else:
         init_epochs_param = -1
+    if arguments['--inv-tau']:
+        inv_tau_param = float(arguments['--inv-tau'])
+    else:
+        inv_tau_param = 3e-2
 
     print arguments
 
     main(train_path_param, dev_path_param, test_path_param, results_file_path_param, sigmorphon_root_dir_param,
          input_dim_param,
          hidden_dim_param, feat_input_dim_param, epochs_param, layers_param, optimization_param, regularization_param,
-         learning_rate_param, plot_param, eval_param, ensemble_param, init_epochs_param, syms_file, normalize_param)
+         learning_rate_param, plot_param, eval_param, ensemble_param, init_epochs_param, syms_file, normalize_param,
+         inv_tau_param)
 
 
 def encode_feats_and_chars(alphabet_index, char_lookup, encoder_frnn, encoder_rrnn, feat_index, feat_lookup, feats,
