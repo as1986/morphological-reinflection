@@ -445,9 +445,9 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                                      feature_types, blstm_outputs=blstm_outputs,
                                      normalize=normalize)
             else:
-                clamped_log_likelihoods = []
+                # clamped_log_likelihoods = []
                 clamped_weights = []
-                free_log_likelihoods = []
+                # free_log_likelihoods = []
                 free_weights = []
                 num_clamped_samples = 64
                 num_free_samples = 128
@@ -461,7 +461,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                                            feats, word, alphabet_index,
                                            alignment, feat_index,
                                            feature_types, blstm_outputs=blstm_outputs, normalize=normalize)
-                    clamped_log_likelihoods.append(loss)
+                    # clamped_log_likelihoods.append(loss)
                     # print 'clamped: {}'.format(loss.value())
                     clamped_weights.append(loss - clamped_sample['weight'])
                     # print (loss - clamped_sample['weight']).value()
@@ -473,19 +473,10 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                                            feats, word, alphabet_index,
                                            alignment, feat_index,
                                            feature_types, blstm_outputs=blstm_outputs, normalize=normalize)
-                    free_log_likelihoods.append(loss)
+                    # free_log_likelihoods.append(loss)
                     free_weights.append(loss - free_sample['weight'])
-
-                clamped_weighted_ll = []
-                clamped_weight_sum = pc.logsumexp(clamped_weights)
-                for ll, w in zip(clamped_log_likelihoods, clamped_weights):
-                    clamped_weighted_ll.append(ll * pc.exp(w - clamped_weight_sum))
-
-                free_weighted_ll = []
-                free_weight_sum = pc.logsumexp(free_weights)
-                for ll, w in zip(free_log_likelihoods, free_weights):
-                    free_weighted_ll.append(ll * pc.exp(w - free_weight_sum))
-                loss = - (pc.average(clamped_weighted_ll) - pc.average(free_weighted_ll))
+                loss = - (pc.logsumexp(clamped_weights) - np.log(num_clamped_samples)
+                          - pc.logsumexp(free_weights) + np.log(num_free_samples))
             loss_value = loss.value()
             print 'loss: {}'.format(loss_value)
             from numpy import isnan, isinf
