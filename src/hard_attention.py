@@ -352,6 +352,12 @@ def sample(machine, sigma, num=64, inv_tau=1.):
     return paths
 
 
+def ess(l):
+    num = pc.esum(l) ** 2
+    denom = pc.esum([x ** 2 for x in l])
+    return num / denom
+
+
 def read_syms(syms_file):
     sigma, inv_sigma, syms = {}, {}, fst.SymbolTable()
     with open(syms_file) as fh:
@@ -466,6 +472,8 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                     clamped_weights.append(loss - clamped_sample['weight'])
                     # print (loss - clamped_sample['weight']).value()
 
+                print 'clamped ess: {}'.format(ess(clamped_weights))
+
                 for free_sample in free_samples:
                     alignment = free_sample['alignment']
                     loss = - one_word_loss(model, char_lookup, feat_lookup,
@@ -475,6 +483,9 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                                            feature_types, blstm_outputs=blstm_outputs, normalize=normalize)
                     # free_log_likelihoods.append(loss)
                     free_weights.append(loss - free_sample['weight'])
+
+                print 'free ess: {}'.format(ess(free_weights))
+
                 loss = - (pc.logsumexp(clamped_weights) - np.log(num_clamped_samples)
                           - pc.logsumexp(free_weights) + np.log(num_free_samples))
             loss_value = loss.value()
