@@ -159,7 +159,7 @@ def main(train_path, dev_path, test_path, results_file_path, sigmorphon_root_dir
                                                         feat_index, feature_types, feat_input_dim, feature_alphabet,
                                                         plot, train_answers, dev_answers,
                                                         init_epochs,
-                                                        syms_file=syms_file, normalize
+                                                        syms_file=syms_file, normalize=normalize
                                                         )
 
         # print when did each model stop
