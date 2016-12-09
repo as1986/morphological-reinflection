@@ -220,7 +220,8 @@ def train_model_wrapper(input_dim, hidden_dim, layers, train_lemmas, train_feat_
                                             epochs, optimization, results_file_path,
                                             feat_index, feature_types,
                                             plot, train_answers, dev_answers, init_epochs, syms_file,
-                                            normalize=normalize, inv_tau=inv_tau)
+                                            normalize=normalize, inv_tau=inv_tau, num_clamped_samples=num_clamped_samples,
+                                            num_free_samples=num_free_samples)
 
     # evaluate last model on dev
     predicted_sequences, train_upper_bound = sample_decode_sequences(trained_model, char_lookup, feat_lookup, R, bias, 
@@ -1034,7 +1035,7 @@ def sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
     from scipy.misc import logsumexp
     from numpy.random import shuffle
     free_fst = read_fst(lemma, inv_sigma, fst_dir, syms)
-    num_free_samples=2048
+    num_free_samples=256
     free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=inv_tau)
     order = np.arange(num_free_samples)
     shuffle(order)
@@ -1059,13 +1060,21 @@ def sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
             crunched_dict[word] += [corrected]
     largest_sum = None
     largest = None
+    crunched_sum = dict()
     for w, l in crunched_dict.iteritems():
         s = logsumexp(l)
         if largest is None or s > largest_sum:
             largest = w
             largest_sum = s
-    print 'lemma: {} largest: {}'.format(lemma, largest)
+        crunched_sum[w] = s
+    # print 'lemma: {} largest: {}'.format(lemma, largest)
     if answer is not None:
+        if answer in crunched_dict:
+            sort = {key: rank for rank, key in enumerate(sorted(crunched_sum, key=x.get, reverse=True))}
+            print '{}, {}, rank #{}'.format(lemma, answer, sort[answer])
+        else:
+            print '{}, {}, not in free samples'.format(lemma, answer)
+
         return largest, answer in crunched_dict
     return largest
 
