@@ -1070,7 +1070,7 @@ def sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
     # print 'lemma: {} largest: {}'.format(lemma, largest)
     if answer is not None:
         if answer in crunched_dict:
-            sort = {key: rank for rank, key in enumerate(sorted(crunched_sum, key=x.get, reverse=True))}
+            sort = {key: rank for rank, key in enumerate(sorted(crunched_sum, key=crunched_sum.get, reverse=True))}
             print '{}, {}, rank #{}'.format(lemma, answer, sort[answer])
         else:
             print '{}, {}, not in free samples'.format(lemma, answer)
