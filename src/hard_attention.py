@@ -467,8 +467,6 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                 clamped_weights = []
                 # free_log_likelihoods = []
                 free_weights = []
-                num_clamped_samples = 1024
-                num_free_samples = 2048
                 clamped_samples = sample(clamped_fst, sigma, num_clamped_samples, inv_tau=inv_tau)
                 free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=inv_tau)
 
