@@ -871,9 +871,10 @@ def encode_feats(feat_index, feat_lookup, feats, feature_types):
 
 
 # noinspection PyPep8Naming
-def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn_init, lemma, feats, alphabet_index,
-                            inverse_alphabet_index, feat_index, feature_types):
+def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, alphabet_index,
+                            inverse_alphabet_index, feat_index, feature_types, inv_tau=None):
     pc.renew_cg()
+    log_probs = 0.
 
     # read the parameters
     # char_lookup = model["char_lookup"]
@@ -895,7 +896,7 @@ def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_fr
     blstm_outputs = bilstm_transduce(encoder_frnn, encoder_rrnn, lemma_char_vecs)
 
     # initialize the decoder rnn
-    s_0 = decoder_rnn.initial_state()
+    s_0 = decoder_rnn
     s = s_0
 
     # set prev_output_vec for first lstm step as BEGIN_WORD
@@ -918,9 +919,13 @@ def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_fr
 
         # compute softmax probs vector and predict with argmax
         decoder_rnn_output = s.output()
-        probs = pc.softmax(R * decoder_rnn_output + bias)
+        probs = pc.log_softmax((R * decoder_rnn_output + bias) * inv_tau)
+
         probs = probs.vec_value()
-        predicted_output_index = common.argmax(probs)
+
+        # predicted_output_index = common.argmax(probs)
+        predicted_output_index = np.random.choice(len(probs), 1, p=probs)[0]
+        log_probs += probs[predicted_output_index]
         predicted_output = inverse_alphabet_index[predicted_output_index]
         predicted_output_sequence.append(predicted_output)
 
@@ -940,7 +945,7 @@ def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_fr
 
     # remove the end word symbol
 
-    return u''.join(predicted_output_sequence[0:-1])
+    return u''.join(predicted_output_sequence[0:-1]), log_probs,
 
 
 def bilstm_transduce(encoder_frnn, encoder_rrnn, lemma_char_vecs):
