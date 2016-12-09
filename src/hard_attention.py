@@ -872,7 +872,7 @@ def encode_feats(feat_index, feat_lookup, feats, feature_types):
 
 # noinspection PyPep8Naming
 def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, alphabet_index,
-                            inverse_alphabet_index, feat_index, feature_types, inv_tau=None):
+                            inverse_alphabet_index, feat_index, feature_types, inv_tau=None, answer=None):
     pc.renew_cg()
     log_probs = 0.
 
@@ -907,6 +907,15 @@ def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_fr
     num_outputs = 0
     predicted_output_sequence = []
 
+    aligned_lemma_indices = []
+    aligned_word = []
+
+    if answer is not None:
+        ans_pos = 0
+
+    all_but_step = [x[1] for x in alphabet_index.iteritems() if x[0] != STEP]
+    all_is_step = [alphabet_index[STEP]]
+
     # run the decoder through the sequence and predict characters, twice max prediction as step outputs are added
     while num_outputs < MAX_PREDICTION_LEN * 3:
 
@@ -917,9 +926,18 @@ def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_fr
 
         s = s.add_input(decoder_input)
 
+        if answer is not None:
+            if ans_pos == 0:
+                restricted = all_but_step
+            elif ans_pos >= len(answer):
+                restricted = all_is_step
+            else:
+                restricted = all_is_step + [alphabet_index[answer[ans_pos]]]
+        else:
+            restricted = []
         # compute softmax probs vector and predict with argmax
         decoder_rnn_output = s.output()
-        probs = pc.log_softmax((R * decoder_rnn_output + bias) * inv_tau)
+        probs = pc.log_softmax((R * decoder_rnn_output + bias) * inv_tau, restrict=restricted)
 
         probs = probs.vec_value()
 
@@ -942,10 +960,21 @@ def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_fr
 
         # prepare for the next iteration - "feedback"
         prev_output_vec = char_lookup[predicted_output_index]
+        aligned_lemma_indices.append(i)
+        if prev_output_vec == STEP:
+            aligned_word.append('~')
+        else:
+            aligned_word.append(prev_output_vec)
 
+    aligned_lemma = []
+    for i, idx in enumerate(aligned_lemma_indices):
+        if idx == 0 or (i > 0 and idx == aligned_lemma_indices[i-1]):
+            aligned_lemma.append('~')
+        else:
+            aligned_lemma.append(padded_lemma[idx])
     # remove the end word symbol
 
-    return u''.join(predicted_output_sequence[0:-1]), log_probs,
+    return u''.join(predicted_output_sequence[0:-1]), log_probs, (u''.join(aligned_lemma), u''.join(aligned_word))
 
 
 def bilstm_transduce(encoder_frnn, encoder_rrnn, lemma_char_vecs):
@@ -990,9 +1019,10 @@ def predict_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, en
                       feats, feat_index, feature_types):
     predictions = {}
     for i, (lemma, feat_dict) in enumerate(zip(lemmas, feats)):
-        predicted_sequence = predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma,
-                                                     feat_dict, alphabet_index, inverse_alphabet_index, feat_index,
-                                                     feature_types)
+        predicted_sequence, _, _ = predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_frnn,
+                                                           encoder_rrnn, decoder_rnn, lemma,
+                                                           feat_dict, alphabet_index, inverse_alphabet_index,
+                                                           feat_index, feature_types, inv_tau=1e3)
 
         # index each output by its matching inputs - lemma + features
         joint_index = lemma + ':' + common.get_morph_string(feat_dict, feature_types)
