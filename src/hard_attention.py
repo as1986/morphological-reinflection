@@ -5,6 +5,7 @@ Usage:
   hard_attention.py [--dynet-mem MEM][--input=INPUT] [--hidden=HIDDEN]
   [--feat-input=FEAT] [--epochs=EPOCHS] [--layers=LAYERS] [--optimization=OPTIMIZATION] [--reg=REGULARIZATION]
   [--learning=LEARNING] [--plot] [--eval] [--do-not-normalize] [--init-epochs=INIT_EPOCHS] [--inv-tau=INV_TAU]
+  [--num-clamped-samples=NUM_CLAMPED_SAMPLES] [--num-free-samples=NUM_FREE_SAMPLES]
   [--ensemble=ENSEMBLE] TRAIN_PATH DEV_PATH TEST_PATH RESULTS_PATH SIGMORPHON_PATH SYMS_PATH
 
 Arguments:
@@ -30,6 +31,8 @@ Options:
   --eval                        run evaluation without training
   --init-epochs=INIT_EPOCHS     number of initialization epochs (i.e. epochs in which the original objective is being minimized)
   --inv-tau=INV_TAU             inverse tau
+  --num-clamped-samples=NUM_CLAMPED_SAMPLES             |clamped samples|
+  --num-free-samples=NUM_FREE_SAMPLES             |free samples|
   --ensemble=ENSEMBLE           ensemble model paths, separated by comma
   --do-not-normalize                   normalize
 """
@@ -104,12 +107,12 @@ def load_preprocessed(path):
 
 def main(train_path, dev_path, test_path, results_file_path, sigmorphon_root_dir, input_dim, hidden_dim, feat_input_dim,
          epochs, layers, optimization, regularization, learning_rate, plot, eval_only, ensemble, init_epochs,
-         syms_file, normalize, inv_tau):
+         syms_file, normalize, inv_tau, num_clamped_samples, num_free_samples):
     hyper_params = {'INPUT_DIM': input_dim, 'HIDDEN_DIM': hidden_dim, 'FEAT_INPUT_DIM': feat_input_dim,
                     'EPOCHS': epochs, 'LAYERS': layers, 'MAX_PREDICTION_LEN': MAX_PREDICTION_LEN,
                     'OPTIMIZATION': optimization, 'PATIENCE': MAX_PATIENCE, 'REGULARIZATION': regularization,
                     'LEARNING_RATE': learning_rate, 'INIT_EPOCHS': init_epochs, 'NORMALIZE': normalize,
-                    'INV_TAU': inv_tau}
+                    'INV_TAU': inv_tau, 'NUM_CLAMPED_SAMPLES': num_clamped_samples, 'NUM_FREE_SAMPLES': num_free_samples}
 
     print 'train path = ' + str(train_path)
     print 'dev path =' + str(dev_path)
@@ -162,7 +165,9 @@ def main(train_path, dev_path, test_path, results_file_path, sigmorphon_root_dir
                                                         plot, train_answers, dev_answers,
                                                         init_epochs,
                                                         syms_file=syms_file, normalize=normalize,
-                                                        inv_tau=inv_tau
+                                                        inv_tau=inv_tau,
+                                                        num_clamped_samples=num_clamped_samples,
+                                                        num_free_samples=num_free_samples
                                                         )
 
         # print when did each model stop
@@ -198,7 +203,8 @@ def train_model_wrapper(input_dim, hidden_dim, layers, train_lemmas, train_feat_
                         alphabet, alphabet_index, inverse_alphabet_index, epochs,
                         optimization, results_file_path, feat_index,
                         feature_types, feat_input_dim, feature_alphabet, plot, train_answers,
-                        dev_answers, init_epochs, syms_file, normalize, inv_tau=None):
+                        dev_answers, init_epochs, syms_file, normalize, inv_tau=None,
+                        num_clamped_samples=None, num_free_samples=None):
     # build model
     initial_model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn = \
         build_model(alphabet, input_dim, hidden_dim, layers, feature_types, feat_input_dim,
@@ -384,7 +390,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                 train_feat_dicts, dev_lemmas, dev_feat_dicts, alphabet_index,
                 inverse_alphabet_index, epochs, optimization, results_file_path,
                 feat_index, feature_types, plot, train_answers, dev_answers, init_epochs, syms_file,
-                normalize=True, inv_tau=3e-2):
+                normalize=True, inv_tau=None, num_clamped_samples=None, num_free_samples=None):
     print 'training...'
     sigma, inv_sigma, syms = read_syms(syms_file)
     fst_dir = '/export/a10/kitsing/ryanouts/ryanout-2PKE-z-0/train/'
@@ -461,8 +467,8 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                 clamped_weights = []
                 # free_log_likelihoods = []
                 free_weights = []
-                num_clamped_samples = 512
-                num_free_samples = 512
+                num_clamped_samples = 1024
+                num_free_samples = 2048
                 clamped_samples = sample(clamped_fst, sigma, num_clamped_samples, inv_tau=inv_tau)
                 free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=inv_tau)
 
@@ -1030,7 +1036,7 @@ def sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
     from scipy.misc import logsumexp
     from numpy.random import shuffle
     free_fst = read_fst(lemma, inv_sigma, fst_dir, syms)
-    num_free_samples=512
+    num_free_samples=2048
     free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=inv_tau)
     order = np.arange(num_free_samples)
     shuffle(order)
@@ -1366,6 +1372,14 @@ if __name__ == '__main__':
         inv_tau_param = float(arguments['--inv-tau'])
     else:
         inv_tau_param = 3e-2
+    if arguments['--num-clamped-samples']:
+        num_clamped_param = int(arguments['--num-clamped-samples'])
+    else:
+        num_clamped_param = 1024
+    if arguments['--num-free-samples']:
+        num_free_param = int(arguments['--num-free-samples'])
+    else:
+        num_free_param = 2048
 
     print arguments
 
@@ -1373,7 +1387,7 @@ if __name__ == '__main__':
          input_dim_param,
          hidden_dim_param, feat_input_dim_param, epochs_param, layers_param, optimization_param, regularization_param,
          learning_rate_param, plot_param, eval_param, ensemble_param, init_epochs_param, syms_file, normalize_param,
-         inv_tau_param)
+         inv_tau_param, num_clamped_param, num_free_param)
 
 
 def encode_feats_and_chars(alphabet_index, char_lookup, encoder_frnn, encoder_rrnn, feat_index, feat_lookup, feats,
