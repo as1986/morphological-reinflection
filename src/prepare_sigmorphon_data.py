@@ -111,9 +111,9 @@ def get_alphabet(words, lemmas, feat_dicts, feat_dicts2=None):
                 possible_feats.add(feat_key)
                 # string representing feature key+val
                 feat = feat_key + '=' + feat_dict[feat_key]
-                alphabet.add(feat)
+                # alphabet.add(feat)
                 # also add null value in case we don't have it
-                alphabet.add(feat_key + '=' + NULL)
+                # alphabet.add(feat_key + '=' + NULL)
     print 'alphabet size:', len(alphabet)
     print 'possible features:', possible_feats
     return list(alphabet), list(possible_feats)

@@ -476,7 +476,6 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                     clamped_samples = []
                     free_samples = []
                     for _ in xrange(num_clamped_samples):
-                        print 'here'
                         _, log_prob, aligned = predict_output_sequence(model, char_lookup, feat_lookup, R, bias,
                                                                        encoder_frnn, encoder_rrnn, decoder_rnn, lemma,
                                                                        feats, alphabet_index, inverse_alphabet_index,
@@ -490,6 +489,14 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                                                                        feat_index, feat_lookup, inv_tau=inv_tau)
                         free_samples.append({'weight': log_prob, 'alignment': aligned,
                                              'word': word_from_alignment(aligned[1])})
+
+                pc.renew_cg()
+                expr_R = pc.parameter(R)
+                expr_bias = pc.parameter(bias)
+                padded_lemma = BEGIN_WORD + lemma + END_WORD
+                lemma_char_vecs = encode_lemma(alphabet_index, char_lookup, padded_lemma)
+                blstm_outputs = bilstm_transduce(encoder_frnn, encoder_rrnn, lemma_char_vecs)
+                decoder_init = decoder_rnn.initial_state()
 
                 for clamped_sample in clamped_samples:
                     alignment = clamped_sample['alignment']
@@ -832,7 +839,7 @@ def one_word_loss(model, char_lookup, feat_lookup, R, bias, decoder_init, padded
             j += 1
 
         # now check if it's time to progress on input - input's not done, should not delay on the character
-        if i < len(padded_lemma) - 1 and aligned_lemma[index + 1] != ALIGN_SYMBOL:
+        if i < len(padded_lemma) - 1 and index < len(aligned_lemma)-1 and aligned_lemma[index + 1] != ALIGN_SYMBOL:
             # perform rnn step
             # feedback, i, j, blstm[i], feats
             decoder_input = pc.concatenate([prev_output_vec,
@@ -932,13 +939,15 @@ def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_fr
 
     if answer is not None:
         ans_pos = 0
+        answer = answer + END_WORD
 
     all_but_step = [x[1] for x in alphabet_index.iteritems() if x[0] != STEP]
+    all_but_end = [x[1] for x in alphabet_index.iteritems() if x[0] != END_WORD]
     all_is_step = [alphabet_index[STEP]]
+    all_is_step = [alphabet_index[END_WORD]]
 
     # run the decoder through the sequence and predict characters, twice max prediction as step outputs are added
     while num_outputs < MAX_PREDICTION_LEN * 3:
-        print 'num_outputs: {}'.format(num_outputs)
 
         # prepare input vector and perform LSTM step
         decoder_input = pc.concatenate([prev_output_vec,
@@ -948,14 +957,15 @@ def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_fr
         s = s.add_input(decoder_input)
 
         if answer is not None:
-            if ans_pos == 0:
-                restricted = all_but_step
-            elif ans_pos >= len(answer):
+            if ans_pos >= len(answer):
                 restricted = all_is_step
             else:
                 restricted = all_is_step + [alphabet_index[answer[ans_pos]]]
         else:
-            restricted = []
+            if i <= len(padded_lemma) - 1:
+                restricted = all_but_end
+            else:
+                restricted = None
         # compute softmax probs vector and predict with argmax
         decoder_rnn_output = s.output()
         probs = pc.log_softmax((R * decoder_rnn_output + bias) * inv_tau, restrict=restricted)
@@ -974,6 +984,9 @@ def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_fr
         if predicted_output == STEP:
             if i < len(padded_lemma) - 1:
                 i += 1
+        elif answer is not None:
+            if ans_pos < len(answer):
+                ans_pos += 1
 
         num_outputs += 1
 
@@ -984,10 +997,10 @@ def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_fr
         # prepare for the next iteration - "feedback"
         prev_output_vec = char_lookup[predicted_output_index]
         aligned_lemma_indices.append(i)
-        if prev_output_vec == STEP:
+        if predicted_output == STEP:
             aligned_word.append('~')
         else:
-            aligned_word.append(prev_output_vec)
+            aligned_word.append(predicted_output)
 
     aligned_lemma = []
     for i, idx in enumerate(aligned_lemma_indices):
@@ -997,9 +1010,9 @@ def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_fr
             aligned_lemma.append(padded_lemma[idx])
     # remove the end word symbol
 
-    print 'to return:'
-    print u''.join(predicted_output_sequence[0:-1]), log_probs, (u''.join(aligned_lemma), u''.join(aligned_word))
-    return u''.join(predicted_output_sequence[0:-1]), log_probs, (u''.join(aligned_lemma), u''.join(aligned_word))
+    # print 'to return:'
+    # print u''.join(predicted_output_sequence[0:-1]), log_probs, (u''.join(aligned_lemma[:-1]), u''.join(aligned_word[:-1]))
+    return u''.join(predicted_output_sequence[0:-1]), log_probs, (u''.join(aligned_lemma[:-1]), u''.join(aligned_word[:-1]))
 
 
 def bilstm_transduce(encoder_frnn, encoder_rrnn, lemma_char_vecs):
