@@ -443,8 +443,6 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
         # compute loss for each example and update
         for i, example in enumerate(train_set):
             lemma, feats, word = example
-            free_fst = read_fst(lemma, inv_sigma, fst_dir, syms)
-            clamped_fst = get_clamped_machine(free_fst, word, syms)
             pc.renew_cg()
             expr_R = pc.parameter(R)
             expr_bias = pc.parameter(bias)
@@ -454,6 +452,8 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             decoder_init = decoder_rnn.initial_state()
             sample_from_fst = False
             if e < init_epochs:
+                free_fst = read_fst(lemma, inv_sigma, fst_dir, syms)
+                clamped_fst = get_clamped_machine(free_fst, word, syms)
                 # get most probably clamped sequence
                 clamped_sample = shortest_path(clamped_fst, sigma, 1)[0]
                 alignment = clamped_sample['alignment']
@@ -470,6 +470,8 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                 # free_log_likelihoods = []
                 free_weights = []
                 if sample_from_fst:
+                    free_fst = read_fst(lemma, inv_sigma, fst_dir, syms)
+                    clamped_fst = get_clamped_machine(free_fst, word, syms)
                     clamped_samples = sample(clamped_fst, sigma, num_clamped_samples, inv_tau=inv_tau)
                     free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=inv_tau)
                 else:
