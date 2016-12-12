@@ -452,6 +452,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
             lemma_char_vecs = encode_lemma(alphabet_index, char_lookup, padded_lemma)
             blstm_outputs = bilstm_transduce(encoder_frnn, encoder_rrnn, lemma_char_vecs)
             decoder_init = decoder_rnn.initial_state()
+            sample_from_fst = False
             if e < init_epochs:
                 # get most probably clamped sequence
                 clamped_sample = shortest_path(clamped_fst, sigma, 1)[0]
@@ -468,8 +469,26 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                 clamped_weights = []
                 # free_log_likelihoods = []
                 free_weights = []
-                clamped_samples = sample(clamped_fst, sigma, num_clamped_samples, inv_tau=inv_tau)
-                free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=inv_tau)
+                if sample_from_fst:
+                    clamped_samples = sample(clamped_fst, sigma, num_clamped_samples, inv_tau=inv_tau)
+                    free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=inv_tau)
+                else:
+                    clamped_samples = []
+                    free_samples = []
+                    for _ in xrange(num_clamped_samples):
+                        _, log_prob, aligned = predict_output_sequence(model, char_lookup, feat_lookup, R, bias,
+                                                                       encoder_frnn, encoder_rrnn, decoder_rnn, lemma,
+                                                                       feats, alphabet_index, inverse_alphabet_index,
+                                                                       feat_index, feat_lookup, inv_tau=inv_tau,
+                                                                       answer=word)
+                        clamped_samples.append({'weight': log_prob, 'alignment': aligned, 'word': word})
+                    for _ in xrange(num_free_samples):
+                        _, log_prob, aligned = predict_output_sequence(model, char_lookup, feat_lookup, R, bias,
+                                                                       encoder_frnn, encoder_rrnn, decoder_rnn, lemma,
+                                                                       feats, alphabet_index, inverse_alphabet_index,
+                                                                       feat_index, feat_lookup, inv_tau=inv_tau)
+                        free_samples.append({'weight': log_prob, 'alignment': aligned,
+                                             'word': word_from_alignment(aligned[1])})
 
                 for clamped_sample in clamped_samples:
                     alignment = clamped_sample['alignment']
@@ -1065,13 +1084,24 @@ def word_from_alignment(alignment):
 
 
 def sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn,
-                  alphabet_index, feat_index, feature_types, lemma, feats, sigma, inv_sigma, fst_dir, syms,
-                  answer=None, normalize=True, inv_tau=None):
+                  alphabet_index, inverse_alphabet_index, feat_index, feature_types, lemma, feats, sigma, inv_sigma,
+                  fst_dir, syms,
+                  answer=None, normalize=True, inv_tau=None, sample_from_fst=True):
     from scipy.misc import logsumexp
     from numpy.random import shuffle
-    free_fst = read_fst(lemma, inv_sigma, fst_dir, syms)
     num_free_samples=256
-    free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=inv_tau)
+    if sample_from_fst:
+        free_fst = read_fst(lemma, inv_sigma, fst_dir, syms)
+        free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=inv_tau)
+    else:
+        free_samples = []
+        for _ in xrange(num_free_samples):
+            _, log_prob, aligned = predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_frnn,
+                                                           encoder_rrnn, decoder_rnn, lemma, feats, alphabet_index,
+                                                           inverse_alphabet_index, feat_index, feature_types,
+                                                           inv_tau,)
+            free_samples.append({'weight': log_prob, 'alignment': aligned,
+                                 'word': word_from_alignment(aligned[1])})
     order = np.arange(num_free_samples)
     shuffle(order)
     crunched_dict = {}
@@ -1117,6 +1147,7 @@ def sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
 def sample_decode_sequences(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn,
                             alphabet_index, inverse_alphabet_index, lemmas, feats, feat_index, feature_types, sigma,
                             inv_sigma, fst_dir, syms, answers=None, normalize=True, inv_tau=None):
+    sample_from_fst = False
     predictions = {}
     if answers is None:
         answers = [None] * len(lemmas)
@@ -1126,9 +1157,9 @@ def sample_decode_sequences(model, char_lookup, feat_lookup, R, bias, encoder_fr
 
         predicted_sequence = sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
                                            decoder_rnn,
-                                           alphabet_index, feat_index, feature_types, lemma, feats,
-                                           sigma, inv_sigma, fst_dir, syms, answer, normalize=normalize,
-                                           inv_tau=inv_tau)
+                                           alphabet_index, inverse_alphabet_index, feat_index, feature_types, lemma,
+                                           feats, sigma, inv_sigma, fst_dir, syms, answer, normalize=normalize,
+                                           inv_tau=inv_tau, sample_from_fst=sample_from_fst)
         if answer is not None:
             if predicted_sequence[1]:
                 count += 1
