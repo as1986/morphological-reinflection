@@ -963,7 +963,9 @@ def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_fr
         probs = probs.vec_value()
 
         # predicted_output_index = common.argmax(probs)
-        predicted_output_index = np.random.choice(len(probs), 1, p=np.exp(probs))[0]
+        from scipy.misc import logsumexp
+        z = logsumexp(probs)
+        predicted_output_index = np.random.choice(len(probs), 1, p=np.exp(probs-z))[0]
         log_probs += probs[predicted_output_index]
         predicted_output = inverse_alphabet_index[predicted_output_index]
         predicted_output_sequence.append(predicted_output)
