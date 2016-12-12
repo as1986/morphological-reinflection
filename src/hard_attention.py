@@ -463,7 +463,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                                      feats, word, alphabet_index,
                                      alignment, feat_index,
                                      feature_types, blstm_outputs=blstm_outputs,
-                                     normalize=normalize)
+                                     normalize=True)
             else:
                 # clamped_log_likelihoods = []
                 clamped_weights = []
@@ -476,6 +476,7 @@ def train_model(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_
                     clamped_samples = []
                     free_samples = []
                     for _ in xrange(num_clamped_samples):
+                        print 'here'
                         _, log_prob, aligned = predict_output_sequence(model, char_lookup, feat_lookup, R, bias,
                                                                        encoder_frnn, encoder_rrnn, decoder_rnn, lemma,
                                                                        feats, alphabet_index, inverse_alphabet_index,
@@ -908,14 +909,14 @@ def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_fr
     lemma_char_vecs = encode_lemma(alphabet_index, char_lookup, padded_lemma)
 
     # convert features to matching embeddings, if UNK handle properly
-    feat_vecs = encode_feats(feat_index, feat_lookup, feats, feature_types)
+    # feat_vecs = encode_feats(feat_index, feat_lookup, feats, feature_types)
 
-    feats_input = pc.concatenate(feat_vecs)
+    # feats_input = pc.concatenate(feat_vecs)
 
     blstm_outputs = bilstm_transduce(encoder_frnn, encoder_rrnn, lemma_char_vecs)
 
     # initialize the decoder rnn
-    s_0 = decoder_rnn
+    s_0 = decoder_rnn.initial_state()
     s = s_0
 
     # set prev_output_vec for first lstm step as BEGIN_WORD
@@ -937,11 +938,12 @@ def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_fr
 
     # run the decoder through the sequence and predict characters, twice max prediction as step outputs are added
     while num_outputs < MAX_PREDICTION_LEN * 3:
+        print 'num_outputs: {}'.format(num_outputs)
 
         # prepare input vector and perform LSTM step
         decoder_input = pc.concatenate([prev_output_vec,
                                         blstm_outputs[i],
-                                        feats_input])
+                                        ])
 
         s = s.add_input(decoder_input)
 
@@ -961,7 +963,7 @@ def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_fr
         probs = probs.vec_value()
 
         # predicted_output_index = common.argmax(probs)
-        predicted_output_index = np.random.choice(len(probs), 1, p=probs)[0]
+        predicted_output_index = np.random.choice(len(probs), 1, p=np.exp(probs))[0]
         log_probs += probs[predicted_output_index]
         predicted_output = inverse_alphabet_index[predicted_output_index]
         predicted_output_sequence.append(predicted_output)
@@ -993,6 +995,8 @@ def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_fr
             aligned_lemma.append(padded_lemma[idx])
     # remove the end word symbol
 
+    print 'to return:'
+    print u''.join(predicted_output_sequence[0:-1]), log_probs, (u''.join(aligned_lemma), u''.join(aligned_word))
     return u''.join(predicted_output_sequence[0:-1]), log_probs, (u''.join(aligned_lemma), u''.join(aligned_word))
 
 
