@@ -900,8 +900,9 @@ def encode_feats(feat_index, feat_lookup, feats, feature_types):
 
 
 # noinspection PyPep8Naming
-def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma, feats, alphabet_index,
-                            inverse_alphabet_index, feat_index, feature_types, inv_tau=None, answer=None):
+def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn, lemma,
+                            feats, alphabet_index, inverse_alphabet_index, feat_index, feature_types,
+                            inv_tau=None, answer=None, normalize=True):
     pc.renew_cg()
     log_probs = 0.
 
@@ -968,9 +969,18 @@ def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_fr
                 restricted = all_but_end
             else:
                 restricted = None
+
+        from numpy import zeros
+        z = zeros((len(alphabet_index),))
+        if restricted is not None:
+            for r in restricted:
+                z[r] = 1
+        else:
+            z.fill(1)
+        z = np.log(z)
         # compute softmax probs vector and predict with argmax
         decoder_rnn_output = s.output()
-        probs = pc.log_softmax((R * decoder_rnn_output + bias) * inv_tau, restrict=restricted)
+        probs = ((R * decoder_rnn_output + bias) + z) * inv_tau
 
         probs = probs.vec_value()
 
@@ -979,6 +989,9 @@ def predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_fr
         z = logsumexp(probs)
         predicted_output_index = np.random.choice(len(probs), 1, p=np.exp(probs-z))[0]
         log_probs += probs[predicted_output_index]
+        if normalize:
+            log_probs -= z
+
         predicted_output = inverse_alphabet_index[predicted_output_index]
         predicted_output_sequence.append(predicted_output)
 
@@ -1102,6 +1115,17 @@ def rerank(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn,
 
 def word_from_alignment(alignment):
     return ''.join([unicode(x) for x in alignment[1] if x != '~'])
+
+
+def sample_lm(model, char_lookup, feat_lookup, R, bias, encoder_frnn,
+              encoder_rrnn, decoder_rnn, lemma, feats, alphabet_index,
+              inverse_alphabet_index, feat_index, feature_types, inv_tau=None,
+              answer=None):
+    _, log_prob, alignment = predict_output_sequence(model, char_lookup, feat_lookup, R, bias, encoder_frnn,
+                                                     encoder_rrnn, decoder_rnn, lemma, feats, alphabet_index,
+                                                     inverse_alphabet_index, feat_index, feature_types, inv_tau=inv_tau,
+                                                     answer=answer)
+    return
 
 
 def sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encoder_rrnn, decoder_rnn,
