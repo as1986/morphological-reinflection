@@ -1110,7 +1110,7 @@ def sample_decode(model, char_lookup, feat_lookup, R, bias, encoder_frnn, encode
                   answer=None, normalize=True, inv_tau=None, sample_from_fst=True):
     from scipy.misc import logsumexp
     from numpy.random import shuffle
-    num_free_samples=256
+    num_free_samples=4
     if sample_from_fst:
         free_fst = read_fst(lemma, inv_sigma, fst_dir, syms)
         free_samples = sample(free_fst, sigma, num_free_samples, inv_tau=inv_tau)
