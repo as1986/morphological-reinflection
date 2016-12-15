@@ -24,6 +24,9 @@ class RNNLanguageModel:
         self.R = model.add_parameters((VOCAB_SIZE, HIDDEN_DIM))
         self.bias = model.add_parameters((VOCAB_SIZE))
 
+    def new_graph(self):
+        self.builder.new_graph()
+
     def BuildLMGraph(self, sent):
         renew_cg()
         init_state = self.builder.initial_state()
@@ -72,7 +75,7 @@ class RNNLanguageModel:
             if nchars and len(res) > nchars: break
         return res, prob
 
-    def evaluate(self, upto):
+    def evaluate(self, upto, first=None, stop=None):
         renew_cg()
         state = self.builder.initial_state()
 
@@ -80,6 +83,12 @@ class RNNLanguageModel:
         bias = parameter(self.bias)
         prob = 0.
         for idx, (cw, next_cw) in enumerate(zip(upto[:-1], upto[1:])):
+            if first is not None:
+                if next_cw == first:
+                    return float('-inf')
+            if stop is not None:
+                if cw == stop:
+                    return float('-inf')
             x_t = lookup(self.lookup, cw)
             state = state.add_input(x_t)
             y_t = state.output()
@@ -88,7 +97,8 @@ class RNNLanguageModel:
             prob -= next_prob.value()
         return prob
 
-    def evaluate_single_state(self, state, last, next_up, R=None, bias=None):
+    def evaluate_single_state(self, state, last, next_up, R=None, bias=None,
+                              first=None, stop=None):
         """
         evaluates a single state. won't renew cg.
         :param state:
@@ -106,6 +116,12 @@ class RNNLanguageModel:
         x_t = lookup(self.lookup, last)
         state = state.add_input(x_t)
         y_t = state.output()
+        if first is not None:
+            if next_up == first:
+                return state, float('-inf')
+        if stop is not None:
+            if last == stop:
+                return state, float('-inf')
         r_t = bias + (R * y_t)
         next_prob = pickneglogsoftmax(r_t, next_up)
         return state, next_prob
@@ -113,16 +129,26 @@ class RNNLanguageModel:
 
 class Sample:
     def __init__(self, lm, log_prob, history, num_sources, states=None):
+        assert isinstance(lm, RNNLanguageModel)
         if states is None:
-            self.states = [lm.builder.initial_state() for _ in num_sources]
+            self.states = []
+            for _ in xrange(num_sources):
+                lm.new_graph()
+                self.states.append(lm.builder.initial_state())
         else:
             self.states = states
         self.log_prob = log_prob
         self.history = history
 
 
-def particle_filter(lm, samples, last, next_up, num_sources, R, bias):
+def particle_filter(lm, samples, last, next_up, num_sources):
+    """
+
+    :rtype: object
+    """
     assert isinstance(lm, RNNLanguageModel)
+    R = parameter(lm.R)
+    bias = parameter(lm.bias)
     candidates = [None] * (num_sources * len(samples))
     for source in xrange(num_sources):
         for s_idx, s in enumerate(samples):
@@ -156,16 +182,17 @@ if __name__ == '__main__':
 
     train = list(train)
 
-    example_sentence = ['<s>', 't', 'h', 'e', ' ', 'N', '.', '\n']
+    example_sentence = ['<s>', 't', 'h', 'e', '\n', '<s>', 'b', 'a', 't', '\n']
     example_encoded = [vocab.w2i[x] for x in example_sentence]
 
     chars = loss = 0.0
-    for ITER in xrange(100):
+    for ITER in xrange(1):
         random.shuffle(train)
-        for i,sent in enumerate(train):
+        for i,sent in enumerate(train[:10]):
             _start = time.time()
             if i % 50 == 0:
                 sgd.status()
+                '''
                 if chars > 0: print loss / chars,
                 for _ in xrange(1):
                     samp, prob = lm.sample(first=vocab.w2i["<s>"],stop=vocab.w2i["\n"])
@@ -174,7 +201,8 @@ if __name__ == '__main__':
                     print 'example logprob: {}'.format(lm.evaluate(example_encoded))
                 loss = 0.0
                 chars = 0.0
-                
+                '''
+
             chars += len(sent)-1
             isent = [vocab.w2i[w] for w in sent]
             errs = lm.BuildLMGraph(isent)
@@ -185,3 +213,14 @@ if __name__ == '__main__':
         print "ITER",ITER,loss
         sgd.status()
         sgd.update_epoch(1.0)
+        
+    num_samples = 10
+    num_sources = 2
+    samples = []
+    for _ in xrange(num_samples):
+        s = Sample(lm, 0., [], num_sources, )
+        samples.append(s)
+    
+    renew_cg()
+    for l, n in zip(example_encoded[:-1], example_encoded[1:]):
+        particle_filter(lm, samples, l, n, num_sources)
